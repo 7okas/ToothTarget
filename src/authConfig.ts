@@ -20,27 +20,25 @@ export const msalConfig: Configuration = {
     clientId: 'd0d97e78-db77-4653-8d52-a30a4e0770a2',
     authority:
       'https://login.microsoftonline.com/consumers',
+
     /*
       Must point at the dedicated MSAL popup redirect bridge page
-      (src/redirect.html + src/redirect.ts), NOT at the app itself -
-      this is what the Microsoft login popup navigates to after the
-      dentist signs in, and it must run ONLY MSAL's own
-      broadcastResponseToMainFrame() bridge, never ToothTarget's
-      normal main.tsx/App.
+      (src/redirect.html + src/redirect.ts), NOT at the app itself.
 
-      Local development uses:
+      Vite's BASE_URL automatically handles both environments:
+
+      Local development:
       http://localhost:5173/src/redirect.html
 
-      GitHub Pages uses:
+      GitHub Pages:
       https://7okas.github.io/ToothTarget/src/redirect.html
 
-      Both exact URLs must be registered as Single-page application
-      redirect URIs in the Entra app registration.
+      The exact production URL must be registered as a Single-page
+      application redirect URI in the Entra app registration.
     */
-    redirectUri: window.location.hostname === 'localhost'
-      ? `${window.location.origin}/src/redirect.html`
-      : `${window.location.origin}/ToothTarget/src/redirect.html`,
+    redirectUri: `${window.location.origin}${import.meta.env.BASE_URL}src/redirect.html`,
   },
+
   cache: {
     /*
       localStorage (rather than MSAL's default sessionStorage) keeps
