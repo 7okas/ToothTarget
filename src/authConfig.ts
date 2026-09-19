@@ -26,11 +26,20 @@ export const msalConfig: Configuration = {
       this is what the Microsoft login popup navigates to after the
       dentist signs in, and it must run ONLY MSAL's own
       broadcastResponseToMainFrame() bridge, never ToothTarget's
-      normal main.tsx/App. This exact URL must also be registered as
-      a Single-page application redirect URI in the Entra app
-      registration (replacing the previous bare-origin one).
+      normal main.tsx/App.
+
+      Local development uses:
+      http://localhost:5173/src/redirect.html
+
+      GitHub Pages uses:
+      https://7okas.github.io/ToothTarget/src/redirect.html
+
+      Both exact URLs must be registered as Single-page application
+      redirect URIs in the Entra app registration.
     */
-    redirectUri: `${window.location.origin}/src/redirect.html`,
+    redirectUri: window.location.hostname === 'localhost'
+      ? `${window.location.origin}/src/redirect.html`
+      : `${window.location.origin}/ToothTarget/src/redirect.html`,
   },
   cache: {
     /*
