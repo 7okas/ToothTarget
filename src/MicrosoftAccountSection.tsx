@@ -19,7 +19,8 @@ import {
   subscribeCloudSyncStatus,
   requestCloudSync,
 } from './cloudSyncScheduler'
-import { reconcileSyncedAccount } from './cloudSyncEngine'
+import { reconcileSyncedAccount, syncCloudNow } from './cloudSyncEngine'
+import { signOutWithBestEffortSync } from './cloudSyncSignOut'
 import { formatDate } from './format'
 
 /*
@@ -220,7 +221,13 @@ export default function MicrosoftAccountSection() {
     setError(null)
     setIsBusy(true)
 
-    await signOut()
+    /*
+      Phase 4: a best-effort sync attempt while the outgoing account's
+      token is still valid, before MSAL sign-out actually clears it -
+      see cloudSyncSignOut.ts for the full reasoning. Never blocks or
+      fails sign-out itself.
+    */
+    await signOutWithBestEffortSync(syncCloudNow, signOut)
 
     setIsBusy(false)
 

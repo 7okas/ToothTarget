@@ -900,7 +900,7 @@ describe('syncCloudNow - crash safety', () => {
 
 })
 
-describe('reconcileSyncedAccount - account-switch isolation (Phase 4)', () => {
+describe('reconcileSyncedAccount - per-account local caches (Phase 4)', () => {
 
   it('treats a first-ever sign-in (no prior account recorded) as normal - no clearing', () => {
 
@@ -932,11 +932,10 @@ describe('reconcileSyncedAccount - account-switch isolation (Phase 4)', () => {
 
     expect(result).toBe('same-account')
     expect(readKey<Patient[]>('toothTargetPatients')).toHaveLength(1)
-    expect(localStorage.getItem('toothTargetAccountSwitchBackup')).toBeNull()
 
   })
 
-  it('quarantines local synced data (not the built-ins) when a different account signs in', () => {
+  it('switching to an account this device has never seen before starts it empty', () => {
 
     seedLocalSynchronizedData({
       patients: [makePatient({ id: 'a' })],
@@ -955,63 +954,137 @@ describe('reconcileSyncedAccount - account-switch isolation (Phase 4)', () => {
 
     expect(result).toBe('switched-account')
 
-    // The four fully-account-specific keys are wiped.
+    // The account-specific keys are all empty for the never-seen-before account.
     expect(readKey<Patient[]>('toothTargetPatients')).toEqual([])
     expect(readKey<SavedTreatment[]>('toothTargetSavedTreatments')).toEqual([])
     expect(readKey<DeletionTombstone[]>('toothTargetDeletionTombstones')).toEqual([])
+    expect(readKey<Procedure[]>('toothTargetProcedures')).toEqual([])
 
-    // Templates/procedures: built-ins survive, customs are removed.
+    // Built-in templates survive; the previous account's custom one does not.
     const remainingTemplates = readKey<ProcedureTemplate[]>('toothTargetTemplates')
     expect(remainingTemplates.map(t => t.id)).toEqual(['general'])
     expect(remainingTemplates.every(t => t.isCustom === false)).toBe(true)
 
-    expect(readKey<Procedure[]>('toothTargetProcedures')).toEqual([])
-
-    // Local-only sync metadata reset too (see cloudSyncEngine.ts's own
-    // reasoning for including toothTargetNextPatientNumber here).
+    // Account-specific local-only metadata reset too.
     expect(localStorage.getItem('toothTargetCloudSyncUpdatedAt')).toBeNull()
     expect(localStorage.getItem('toothTargetNextPatientNumber')).toBeNull()
 
-    // A backup of exactly what was cleared was preserved.
-    const backup = readKey<{
-      previousAccountId: string
-      patients: Patient[]
-      savedTreatments: SavedTreatment[]
-      customTemplates: ProcedureTemplate[]
-      customProcedures: Procedure[]
-      deletionTombstones: DeletionTombstone[]
-      nextPatientNumber: number
-    }>('toothTargetAccountSwitchBackup')
-
-    expect(backup.previousAccountId).toBe('account-1')
-    expect(backup.patients.map(p => p.id)).toEqual(['a'])
-    expect(backup.savedTreatments).toHaveLength(1)
-    expect(backup.customTemplates.map(t => t.id)).toEqual(['custom-t'])
-    expect(backup.customProcedures.map(p => p.id)).toEqual(['custom-p'])
-    expect(backup.deletionTombstones).toHaveLength(1)
-    expect(backup.nextPatientNumber).toBe(42)
-
-    // The new account is now the recorded one - signing in with it
-    // again is a normal, no-clearing 'same-account' pass.
-    expect(reconcileSyncedAccount('account-2')).toBe('same-account')
-
   })
 
-  it('overwrites (does not accumulate) the backup across repeated switches', () => {
+  it('preserves the outgoing account\'s CURRENT state (including unsynced changes) into its own cache', () => {
 
     seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
     reconcileSyncedAccount('account-1')
+
+    // A change happens AFTER account-1 became active but before it's
+    // ever switched away from - simulating a completed treatment that
+    // hasn't reached the cloud yet.
+    seedLocalSynchronizedData({
+      patients: [makePatient({ id: 'a' }), makePatient({ id: 'a2', patientNumber: 2 })],
+    })
+    seed('toothTargetNextPatientNumber', 3)
+
     reconcileSyncedAccount('account-2')
 
-    seedLocalSynchronizedData({ patients: [makePatient({ id: 'b' })] })
-    reconcileSyncedAccount('account-3')
+    // Switch back to account-1 - its cache must reflect the LATEST
+    // state it had, not whatever it looked like right after its own
+    // first reconcileSyncedAccount() call.
+    const result = reconcileSyncedAccount('account-1')
 
-    const backup = readKey<{ previousAccountId: string; patients: Patient[] }>(
-      'toothTargetAccountSwitchBackup'
-    )
+    expect(result).toBe('switched-account')
+    expect(
+      readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
+    ).toEqual(['a', 'a2'])
+    expect(readKey<number>('toothTargetNextPatientNumber')).toBe(3)
 
-    expect(backup.previousAccountId).toBe('account-2')
-    expect(backup.patients.map(p => p.id)).toEqual(['b'])
+  })
+
+  it('switching back to a previously-seen account restores exactly what was cached for it', () => {
+
+    /*
+      Seeding happens AFTER each reconcileSyncedAccount() call, never
+      before switching AWAY from the previous account - data written
+      before a switch is still logically the OUTGOING account's
+      current state (see captureCurrentAccountState()'s own comment:
+      it reads whatever is currently in localStorage AT THE MOMENT OF
+      THE SWITCH), not a preview of the incoming account's data.
+    */
+
+    reconcileSyncedAccount('account-1')
+    seedLocalSynchronizedData({
+      patients: [makePatient({ id: 'a1' })],
+      templates: [makeBuiltinTemplate(), makeTemplate({ id: 'a1-template' })],
+    })
+    seed('toothTargetNextPatientNumber', 5)
+
+    reconcileSyncedAccount('account-2')
+    seedLocalSynchronizedData({
+      patients: [makePatient({ id: 'b1' })],
+      templates: [makeBuiltinTemplate(), makeTemplate({ id: 'b1-template' })],
+    })
+    seed('toothTargetNextPatientNumber', 9)
+
+    // account-2's own data is active now.
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['b1'])
+
+    // Switching back to account-1 restores exactly what it had.
+    reconcileSyncedAccount('account-1')
+
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['a1'])
+
+    const templates = readKey<ProcedureTemplate[]>('toothTargetTemplates')
+    expect(templates.map(t => t.id).sort()).toEqual(['a1-template', 'general'])
+
+    expect(readKey<number>('toothTargetNextPatientNumber')).toBe(5)
+
+  })
+
+  it('keeps at least 3 accounts fully isolated across repeated back-and-forth switches', () => {
+
+    reconcileSyncedAccount('account-a')
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a1' })] })
+
+    reconcileSyncedAccount('account-b')
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'b1' })] })
+
+    reconcileSyncedAccount('account-c')
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'c1' })] })
+
+    // Round 1: back to a, then b, then c - each must see only its own data.
+    reconcileSyncedAccount('account-a')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['a1'])
+
+    reconcileSyncedAccount('account-b')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['b1'])
+
+    reconcileSyncedAccount('account-c')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['c1'])
+
+    // Add more data to 'a' from a non-adjacent switch, to confirm its
+    // slot isn't disturbed by b/c being active in between.
+    reconcileSyncedAccount('account-a')
+    seedLocalSynchronizedData({
+      patients: [makePatient({ id: 'a1' }), makePatient({ id: 'a2', patientNumber: 2 })],
+    })
+
+    reconcileSyncedAccount('account-b')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['b1'])
+
+    reconcileSyncedAccount('account-c')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['c1'])
+
+    reconcileSyncedAccount('account-a')
+    expect(
+      readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
+    ).toEqual(['a1', 'a2'])
+
+    // b and c were never touched again and still hold exactly their
+    // own single patient each.
+    reconcileSyncedAccount('account-b')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['b1'])
+
+    reconcileSyncedAccount('account-c')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['c1'])
 
   })
 

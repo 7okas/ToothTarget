@@ -542,7 +542,7 @@ export function syncCloudNow(): Promise<CloudSyncResult> {
 
 /*
   ============================================================
-  ACCOUNT-SWITCH ISOLATION (Phase 4)
+  PER-ACCOUNT LOCAL CACHES (Phase 4, reworked)
   ============================================================
 
   Local synced data (the five keys above) carries no notion of WHICH
@@ -552,6 +552,15 @@ export function syncCloudNow(): Promise<CloudSyncResult> {
   sync would otherwise merge the previous account's still-present
   local data into the new account's OneDrive - two accounts' patient/
   treatment data silently mixed together, in either direction.
+
+  The original version of this (a single rolling "quarantine" backup,
+  wiped-and-restored-from-one-slot) has been replaced by a per-account
+  CACHE: every Microsoft account that has ever been active on this
+  device gets its own persistent slot, kept indefinitely, so switching
+  back and forth between accounts always resumes each one exactly
+  where it left off - including anything that hadn't reached the
+  cloud yet - rather than starting the returning account fresh from
+  its cloud document every time.
 
   reconcileSyncedAccount() must be called with the newly active
   account's stable identifier - MSAL's AccountInfo.homeAccountId, the
@@ -569,15 +578,75 @@ export function syncCloudNow(): Promise<CloudSyncResult> {
   cloudSyncScheduler.ts) - this file keeps no direct dependency on
   auth.ts/MSAL types; the caller already has the account and passes
   just the one fact this module needs.
+
+  ============================================================
+  STORAGE FORMAT - one localStorage key PER ACCOUNT
+  ============================================================
+
+  toothTargetAccountCache_<accountId>, rather than one shared key
+  holding a { [accountId]: cache } map. Chosen over the single-object
+  alternative for two reasons: every read/write this module ever does
+  only ever touches ONE account's slot at a time (the outgoing
+  account's when saving, the incoming account's when restoring) - a
+  shared map would mean parsing and rewriting every OTHER account's
+  data too on each operation, for no benefit here, since nothing in
+  this design ever needs to enumerate "every account this device has
+  seen." One key per account also isolates a corrupted/malformed cache
+  to that single account, rather than one bad JSON.parse() taking out
+  every account's data at once. homeAccountId is an opaque, trusted
+  identifier from MSAL (a GUID-like string), safe to use directly as a
+  key suffix with no encoding needed.
 */
 
 const SYNCED_ACCOUNT_ID_KEY = 'toothTargetSyncedAccountId'
-const ACCOUNT_SWITCH_BACKUP_KEY = 'toothTargetAccountSwitchBackup'
+
+function accountCacheKey(accountId: string): string {
+  return `toothTargetAccountCache_${accountId}`
+}
 
 export type AccountSyncGuardResult =
   | 'first-account'
   | 'same-account'
   | 'switched-account'
+
+/*
+  Everything this module considers "this account's own local synced
+  state" - the five synced collections, plus two pieces of otherwise
+  local-only metadata that are nonetheless meaningfully account-
+  specific (see below) - travels together as one unit whenever an
+  account's slot is saved or restored.
+*/
+type AccountLocalCache = {
+  patients: unknown[]
+  savedTreatments: unknown[]
+  customTemplates: unknown[]
+  customProcedures: unknown[]
+  deletionTombstones: unknown[]
+  /*
+    toothTargetNextPatientNumber is otherwise local-only/never-synced
+    (see this file's own top header comment) - but unlike active/
+    incomplete treatments or the privacy lock, it IS semantically tied
+    to THIS account's own patient numbering: left stale (eg. carried
+    over from whichever account happened to be active most recently),
+    it can only ever ratchet up (never down, per commitLocalState()'s
+    own Math.max reconciliation), so an account resuming after another
+    account was used in between could see its own next-patient-number
+    jump ahead for no reason. Caching and restoring it per account
+    keeps each account's own numbering exactly where that account
+    itself left it.
+  */
+  nextPatientNumber: number
+  /*
+    toothTargetCloudSyncUpdatedAt likewise isn't one of the five
+    synced collections, but it's the rest of "this account's local
+    sync state" in every other sense (see this file's own comment on
+    LOCAL_SYNC_UPDATED_AT_KEY above) - caching it alongside the
+    collections it describes means a restored account resumes with
+    its own accurate local sync timestamp instead of silently losing
+    it to another account's most recent value.
+  */
+  cloudSyncUpdatedAt: string | null
+}
 
 function readSyncedAccountId(): string | null {
 
@@ -588,47 +657,20 @@ function readSyncedAccountId(): string | null {
 }
 
 /*
-  QUARANTINE (not a silent wipe - see this phase's report for the full
-  reasoning)
-
-  Local data can genuinely be AHEAD of the outgoing account's own
-  cloud document - eg. a treatment was just completed, and
-  requestCloudSync() hasn't finished (or even started) before the
-  dentist switches accounts. Simply discarding local data in that
-  case would make that work unrecoverable even by signing back into
-  the correct account, since the correct account's cloud copy would
-  still be missing it. A single ROLLING backup (overwritten on every
-  switch, never accumulated) is kept instead - enough to recover from
-  "signed into the wrong account by mistake" without unbounded
-  localStorage growth across repeated switches.
-
-  Only the account-specific portions of templates/procedures
-  (isCustom === true) are cleared/backed up - built-ins are a fixed
-  catalog, never account-specific, exactly the same distinction
-  commitLocalState() already draws for the same two keys.
-
-  toothTargetNextPatientNumber is reset too, even though it is
-  otherwise local-only/never-synced (see this file's own top header
-  comment) - unlike active/incomplete treatments or the privacy lock,
-  it IS semantically tied to the outgoing account's own patient
-  numbering: left stale, it can only ever ratchet up (never down, per
-  commitLocalState()'s own Math.max reconciliation), so the new
-  account's first patients would otherwise start numbering from
-  wherever the old account happened to leave off - a visible,
-  confusing artifact, not a harmless one. This is a deliberate
-  judgment call beyond the literal five synced keys - flagged
-  explicitly in this phase's report.
+  Reads WHATEVER is currently in the five synced keys right now - not
+  a stale snapshot from whenever this account was last active or last
+  synced. This is what guarantees a switch AWAY from an account
+  preserves its latest state, including anything added since its own
+  last successful cloud sync (eg. a treatment completed moments before
+  switching accounts, per this module's own crash-safety reasoning
+  elsewhere in this file).
 */
-
-function quarantineLocalAccountData(previousAccountId: string): void {
+function captureCurrentAccountState(): AccountLocalCache {
 
   const currentTemplates = readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[]
   const currentProcedures = readLocalArray(PROCEDURES_KEY) as Procedure[]
 
-  const backup = {
-    previousAccountId,
-    clearedAt: new Date().toISOString(),
-    previousSyncUpdatedAt: readLocalSyncUpdatedAt(),
+  return {
     patients: readLocalArray(PATIENTS_KEY),
     savedTreatments: readLocalArray(SAVED_TREATMENTS_KEY),
     customTemplates: currentTemplates.filter(
@@ -639,60 +681,144 @@ function quarantineLocalAccountData(previousAccountId: string): void {
     ),
     deletionTombstones: readLocalArray(TOMBSTONES_KEY),
     nextPatientNumber: readPersistedNextPatientNumber(),
+    cloudSyncUpdatedAt: readLocalSyncUpdatedAt(),
   }
+
+}
+
+function saveAccountCache(accountId: string, cache: AccountLocalCache): void {
 
   try {
 
-    localStorage.setItem(ACCOUNT_SWITCH_BACKUP_KEY, JSON.stringify(backup))
+    localStorage.setItem(accountCacheKey(accountId), JSON.stringify(cache))
 
   } catch (error) {
 
     console.error(
-      'Cloud sync: could not save a backup of the previous Microsoft ' +
-      'account\'s local data before switching accounts - proceeding ' +
-      'with the clear anyway.',
+      'Cloud sync: could not save this Microsoft account\'s local data ' +
+      'to its own cache before switching accounts - its local-only ' +
+      'changes may not carry over the next time this account is used ' +
+      'on this device (they are not lost from the cloud, if they had ' +
+      'already synced before this point).',
       error
     )
 
   }
 
-  localStorage.setItem(PATIENTS_KEY, JSON.stringify([]))
-  localStorage.setItem(SAVED_TREATMENTS_KEY, JSON.stringify([]))
+}
+
+/*
+  Never throws and never returns anything malformed - a corrupted or
+  hand-edited cache entry is treated exactly like "this device has
+  never seen this account before" (null) rather than crashing or
+  feeding invalid shapes into the rest of this module.
+*/
+function readAccountCache(accountId: string): AccountLocalCache | null {
+
+  try {
+
+    const raw = localStorage.getItem(accountCacheKey(accountId))
+
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw)
+
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+
+    const candidate = parsed as Partial<AccountLocalCache>
+
+    return {
+      patients: Array.isArray(candidate.patients) ? candidate.patients : [],
+      savedTreatments: Array.isArray(candidate.savedTreatments) ? candidate.savedTreatments : [],
+      customTemplates: Array.isArray(candidate.customTemplates) ? candidate.customTemplates : [],
+      customProcedures: Array.isArray(candidate.customProcedures) ? candidate.customProcedures : [],
+      deletionTombstones: Array.isArray(candidate.deletionTombstones) ? candidate.deletionTombstones : [],
+      nextPatientNumber:
+        typeof candidate.nextPatientNumber === 'number' && candidate.nextPatientNumber > 0
+          ? candidate.nextPatientNumber
+          : 1,
+      cloudSyncUpdatedAt:
+        typeof candidate.cloudSyncUpdatedAt === 'string' ? candidate.cloudSyncUpdatedAt : null,
+    }
+
+  } catch {
+
+    return null
+
+  }
+
+}
+
+/*
+  Makes the five synced keys (+ the two account-specific metadata
+  keys) reflect `cache` - or, when `cache` is null (this device has
+  never seen the incoming account before), reflect a clean, empty
+  default - exactly like today's first-time-device behavior. Built-in
+  templates/procedures are preserved either way, read fresh from
+  whatever is CURRENTLY persisted, the same pattern commitLocalState()
+  already uses for the same reason (built-ins are never account-
+  specific and must never be replaced or duplicated by this).
+*/
+function applyAccountCacheToLocalStorage(cache: AccountLocalCache | null): void {
+
+  const builtInTemplates =
+    (readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[])
+      .filter(template => template.isCustom === false)
+
+  const builtInProcedures =
+    (readLocalArray(PROCEDURES_KEY) as Procedure[])
+      .filter(procedure => procedure.isCustom === false)
+
+  localStorage.setItem(PATIENTS_KEY, JSON.stringify(cache?.patients ?? []))
+
+  localStorage.setItem(
+    SAVED_TREATMENTS_KEY,
+    JSON.stringify(cache?.savedTreatments ?? [])
+  )
 
   localStorage.setItem(
     TEMPLATES_KEY,
-    JSON.stringify(currentTemplates.filter(template => template.isCustom === false))
+    JSON.stringify([...builtInTemplates, ...(cache?.customTemplates ?? [])])
   )
 
   localStorage.setItem(
     PROCEDURES_KEY,
-    JSON.stringify(currentProcedures.filter(procedure => procedure.isCustom === false))
+    JSON.stringify([...builtInProcedures, ...(cache?.customProcedures ?? [])])
   )
 
-  localStorage.setItem(TOMBSTONES_KEY, JSON.stringify([]))
-
-  localStorage.removeItem(LOCAL_SYNC_UPDATED_AT_KEY)
-  localStorage.removeItem(NEXT_PATIENT_NUMBER_KEY)
-
-  console.warn(
-    'Cloud sync: switched to a different Microsoft account on this device. ' +
-    'This device\'s local patients, treatments, custom templates/procedures, ' +
-    `and deletion history from the previous account have been cleared (a ` +
-    `backup was saved under localStorage key "${ACCOUNT_SWITCH_BACKUP_KEY}" ` +
-    'in case this was a mistake) so they are not merged into the new ' +
-    'account\'s cloud data. The next sync will pull down the new account\'s ' +
-    'own data.'
+  localStorage.setItem(
+    TOMBSTONES_KEY,
+    JSON.stringify(cache?.deletionTombstones ?? [])
   )
+
+  if (cache) {
+    localStorage.setItem(NEXT_PATIENT_NUMBER_KEY, JSON.stringify(cache.nextPatientNumber))
+  } else {
+    localStorage.removeItem(NEXT_PATIENT_NUMBER_KEY)
+  }
+
+  if (cache?.cloudSyncUpdatedAt) {
+    localStorage.setItem(LOCAL_SYNC_UPDATED_AT_KEY, cache.cloudSyncUpdatedAt)
+  } else {
+    localStorage.removeItem(LOCAL_SYNC_UPDATED_AT_KEY)
+  }
 
 }
 
 /*
   Call with the newly active account's homeAccountId. Returns which
   case applied - purely informational (eg. for a console log at the
-  call site); every case still allows the caller's own normal
-  sync-on-sign-in request to proceed afterward exactly as before,
-  since by the time this returns, local state is guaranteed to belong
-  to `accountId` either way.
+  call site). On 'switched-account', local state has already been
+  swapped to the incoming account's own cache (or reset to empty, if
+  this device has never seen it) by the time this returns; the
+  caller is still expected to reload the page afterward (see this
+  file's report) so React state - already initialized from the
+  OUTGOING account's data before this runs - doesn't keep showing
+  stale data on screen.
 */
 
 export function reconcileSyncedAccount(accountId: string): AccountSyncGuardResult {
@@ -711,9 +837,25 @@ export function reconcileSyncedAccount(accountId: string): AccountSyncGuardResul
     return 'same-account'
   }
 
-  quarantineLocalAccountData(storedAccountId)
+  saveAccountCache(storedAccountId, captureCurrentAccountState())
+
+  const incomingCache = readAccountCache(accountId)
+
+  applyAccountCacheToLocalStorage(incomingCache)
 
   localStorage.setItem(SYNCED_ACCOUNT_ID_KEY, accountId)
+
+  console.warn(
+    'Cloud sync: switched to a different Microsoft account on this device. ' +
+    `This device's local data has been switched to that account's own ` +
+    (incomingCache
+      ? 'cache from a previous session on this device.'
+      : 'fresh (empty) local state, since this device has not seen that account before.') +
+    ' The outgoing account\'s local data was saved to its own cache and ' +
+    'will be there again the next time this device signs into it. The ' +
+    'next sync will reconcile this local state against that account\'s ' +
+    'real cloud data.'
+  )
 
   return 'switched-account'
 
@@ -721,10 +863,12 @@ export function reconcileSyncedAccount(accountId: string): AccountSyncGuardResul
 
 /*
   TEST-ONLY - resets this module's account-guard state between test
-  cases. Never called from production code.
+  cases. Never called from production code. Does not attempt to
+  enumerate/clear every per-account cache key (there is no bounded set
+  to enumerate) - tests that need a clean slate use a fresh in-memory
+  localStorage per test instead (see cloudSyncEngine.test.ts).
 */
 
 export function __resetAccountSyncGuardForTests(): void {
   localStorage.removeItem(SYNCED_ACCOUNT_ID_KEY)
-  localStorage.removeItem(ACCOUNT_SWITCH_BACKUP_KEY)
 }
