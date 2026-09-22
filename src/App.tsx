@@ -27,6 +27,7 @@ import {
   resolvePatientNumberConflict,
 } from './patientNumberConflicts'
 import { requestCloudSync, requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
+import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { getActiveAccount } from './auth'
 
 export type TemplatePhase = {
@@ -3650,6 +3651,24 @@ const [conflictResolutionError, setConflictResolutionError] =
   useEffect(() => {
     requestCloudSyncIfSignedIn(Boolean(getActiveAccount()))
   }, [])
+
+
+  /*
+    RETRY SYNC WHEN CONNECTIVITY RETURNS (Phase 3)
+
+    A sync that failed because the network dropped mid-request
+    otherwise only retries whenever some unrelated mutation next calls
+    requestCloudSync() - possibly a long wait, or never, in a session
+    with no further changes. attachOnlineRetryListener() (see
+    cloudSyncOnlineRetry.ts) listens for the browser's own 'online'
+    event and asks for one more attempt when it fires, gated on
+    sign-in status the same way every other automatic trigger is.
+
+    No ordering dependency on the migration effect above - unlike the
+    app-load trigger, this only ever fires later, in response to a
+    real browser event, never synchronously during mount.
+  */
+  useEffect(() => attachOnlineRetryListener(), [])
 
 
   /*
