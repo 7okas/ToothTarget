@@ -229,6 +229,28 @@ export function requestCloudSync(): void {
 }
 
 /*
+  Call this from a trigger that has no synchronized-data mutation of
+  its own to report - app load, and a fresh Microsoft sign-in (see
+  App.tsx's post-migration effect and MicrosoftAccountSection.tsx's
+  handleSignIn()). Both of those only want to reconcile with the cloud
+  IF a Microsoft account is actually signed in; neither should ever
+  start (or even schedule) a sync attempt for a dentist who has never
+  connected one - not a console log, not a status transition, nothing.
+  Takes a plain boolean rather than an account/MSAL type so this
+  module stays free of any dependency on auth.ts - the caller already
+  knows whether it has an account (getActiveAccount() truthy, or a
+  just-succeeded sign-in) and just reports that one fact here.
+*/
+
+export function requestCloudSyncIfSignedIn(isSignedIn: boolean): void {
+
+  if (isSignedIn) {
+    requestCloudSync()
+  }
+
+}
+
+/*
   TEST-ONLY - resets this module's internal scheduling state between
   test cases. Never called from production code.
 */

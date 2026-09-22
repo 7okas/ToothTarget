@@ -26,7 +26,8 @@ import {
   reconcileAndPersistPatientNumberConflicts,
   resolvePatientNumberConflict,
 } from './patientNumberConflicts'
-import { requestCloudSync } from './cloudSyncScheduler'
+import { requestCloudSync, requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
+import { getActiveAccount } from './auth'
 
 export type TemplatePhase = {
   name: string
@@ -3617,6 +3618,37 @@ const [conflictResolutionError, setConflictResolutionError] =
 
     }
 
+  }, [])
+
+
+  /*
+    AUTOMATIC SYNC ON APP LOAD (Phase 2)
+
+    Fires once, on mount, but only ever requests a sync if a Microsoft
+    account is already active - a dentist who has never signed in gets
+    zero sync activity from this effect, not even an attempted-and-
+    failed one (see requestCloudSyncIfSignedIn()'s own comment).
+
+    Ordering: this must never run before the migration effect above
+    has finished, since a sync validates local data against the
+    CURRENT schema and migrations are what make old data valid (see
+    cloudSyncEngine.ts's buildLocalCloudSyncDocument()). React runs
+    same-phase effects in the order they're declared on initial mount,
+    and the migration effect above is entirely synchronous (no awaits,
+    no setTimeout), so by the time THIS effect's callback runs,
+    migrations are already fully committed to localStorage - no extra
+    flag or dependency is needed to enforce that ordering.
+
+    getActiveAccount() is already authoritative here, not just a
+    best-effort guess: main.tsx awaits initializeMsal() (which
+    restores any cached account, or confirms one from a just-completed
+    redirect sign-in) BEFORE React ever renders, so there is no
+    "MSAL might still be initializing" window during this component's
+    own mount. A later, in-session popup sign-in is a separate trigger
+    (see MicrosoftAccountSection.tsx's handleSignIn()), not this one.
+  */
+  useEffect(() => {
+    requestCloudSyncIfSignedIn(Boolean(getActiveAccount()))
   }, [])
 
 

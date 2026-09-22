@@ -7,6 +7,7 @@ vi.mock('./cloudSyncEngine', () => ({
 import { syncCloudNow } from './cloudSyncEngine'
 import {
   requestCloudSync,
+  requestCloudSyncIfSignedIn,
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
   __resetCloudSyncSchedulerForTests,
@@ -257,6 +258,46 @@ describe('requestCloudSync - success', () => {
     const returnValue = requestCloudSync()
 
     expect(returnValue).toBeUndefined()
+
+  })
+
+})
+
+describe('requestCloudSyncIfSignedIn - automatic triggers (Phase 2)', () => {
+
+  it('starts a sync when already signed in (eg. app load with a cached account)', async () => {
+
+    requestCloudSyncIfSignedIn(true)
+
+    await flushMicrotasks()
+
+    expect(mockedSyncCloudNow).toHaveBeenCalledTimes(1)
+
+  })
+
+  it('does not start, or even schedule, a sync when signed out', async () => {
+
+    requestCloudSyncIfSignedIn(false)
+
+    await flushMicrotasks(10)
+
+    expect(mockedSyncCloudNow).not.toHaveBeenCalled()
+    expect(getCloudSyncStatus()).toBe('idle')
+
+  })
+
+  it('a fresh sign-in (isSignedIn: true) behaves exactly like requestCloudSync()', async () => {
+
+    expect(getCloudSyncStatus()).toBe('idle')
+
+    requestCloudSyncIfSignedIn(true)
+
+    expect(getCloudSyncStatus()).toBe('pending')
+
+    await flushMicrotasks()
+
+    expect(getCloudSyncStatus()).toBe('idle')
+    expect(mockedSyncCloudNow).toHaveBeenCalledTimes(1)
 
   })
 

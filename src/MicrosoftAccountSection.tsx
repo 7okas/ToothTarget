@@ -17,6 +17,7 @@ import {
 import {
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
+  requestCloudSync,
 } from './cloudSyncScheduler'
 import { formatDate } from './format'
 
@@ -174,7 +175,22 @@ export default function MicrosoftAccountSection() {
       already picked up and re-rendered from.
     */
     if (result.error) {
+
       setError(result.error)
+
+    } else {
+
+      /*
+        Phase 2: a fresh sign-in is one of the two new automatic sync
+        triggers (the other is app load, see App.tsx) - reconcile with
+        the cloud immediately rather than waiting for the next
+        unrelated patient/treatment/template mutation. No "signed in?"
+        guard needed here (unlike App.tsx's app-load trigger) - a
+        successful result with no error means an account now exists,
+        by construction.
+      */
+      requestCloudSync()
+
     }
 
   }
