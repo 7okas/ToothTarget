@@ -1072,6 +1072,103 @@ button:disabled:hover {
 
 
 /* ===========================
+   Startup sync overlay (Phase 4, Part B) - centered, temporary,
+   first-sync-of-session only
+
+   Separate and more prominent than the small top-right badge above -
+   a centered card rather than a corner pill - but reuses the exact
+   same fade-out mechanics (400ms opacity transition, a `-fading`
+   modifier class) for visual consistency with it. pointer-events:
+   none for the same reason as the badge: purely informational, must
+   never intercept a tap. z-index sits above the badge (40) since it's
+   meant to be the more prominent of the two, but still below
+   .modal-overlay's (100).
+=========================== */
+
+.startup-sync-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-6);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 400ms ease;
+}
+
+.startup-sync-overlay-success {
+  color: var(--color-success-strong);
+}
+
+.startup-sync-overlay-error {
+  color: var(--color-danger-strong);
+}
+
+.startup-sync-overlay-fading {
+  opacity: 0;
+}
+
+.startup-sync-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+
+.startup-sync-icon-spinner {
+  border: 3px solid var(--color-border-strong);
+  border-top-color: var(--color-text-muted);
+  animation: sync-status-spin 800ms linear infinite;
+}
+
+.startup-sync-icon-success,
+.startup-sync-icon-error {
+  position: relative;
+}
+
+.startup-sync-icon-success {
+  background: var(--color-success);
+}
+
+.startup-sync-icon-error {
+  background: var(--color-danger);
+}
+
+.startup-sync-icon-success::after,
+.startup-sync-icon-error::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: #fff;
+}
+
+.startup-sync-icon-success::after {
+  content: '\2713';
+}
+
+.startup-sync-icon-error::after {
+  content: '\2715';
+}
+
+
+/* ===========================
    Delete patient
 =========================== */
 

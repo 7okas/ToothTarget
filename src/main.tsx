@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import SyncStatusIndicator from './SyncStatusIndicator.tsx'
+import StartupSyncOverlay from './StartupSyncOverlay.tsx'
 import { initializeMsal } from './auth.ts'
 
 /*
@@ -21,6 +22,7 @@ initializeMsal().finally(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <SyncStatusIndicator />
+      <StartupSyncOverlay />
       <App />
     </StrictMode>,
   )
