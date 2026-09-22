@@ -955,22 +955,51 @@ button:disabled:hover {
 /* ===========================
    Sync status indicator (fixed, top-right, every screen)
 
-   Sits in .app's own outer padding gutter (--space-8, or the smaller
-   value each breakpoint below uses), never inside the centered,
-   max-width 700px .top-header content every screen already uses -
-   confirmed clear of the back button/title/patient name/timer on the
-   Patient, Timer, and Settings screens. pointer-events: none since
-   it's purely informational and must never intercept a tap on an
-   iPad. z-index kept below .modal-overlay's (100) so an open modal's
-   backdrop still covers it, same as everything else on the page.
+   .sync-status-indicator-rail is the positioning layer: fixed to the
+   VIEWPORT vertically (so it stays visible while a screen's content
+   scrolls - this is meant to be persistent, not something that
+   scrolls away), but its own width is capped at 1126px and centered
+   exactly like index.css's `#root { width: 1126px; max-width: 100%;
+   margin: 0 auto }` - the actual app-content boundary. justify-content:
+   flex-end then pins the real badge to THAT box's right edge, not the
+   raw browser viewport's - so on a wide desktop window (where index.css's
+   leftover template width leaves empty side gutters outside #root, see
+   this project's Part 1 investigation notes on that file) the badge
+   still lines up with the visible app content instead of sitting out
+   in the empty margin. The 1126px figure is a deliberate duplicate of
+   index.css's #root width, not a new constraint of its own - if #root's
+   width/centering ever changes, this must change with it.
+
+   Confirmed clear of the back button/title/patient name/timer on the
+   Patient, Timer, and Settings screens either way: .top-header is
+   itself centered with its own max-width: 700px, well inside the
+   1126px rail, so the badge in the rail's top-right corner never
+   overlaps it.
+
+   pointer-events: none throughout since this is purely informational
+   and must never intercept a tap on an iPad. z-index kept below
+   .modal-overlay's (100) so an open modal's backdrop still covers it,
+   same as everything else on the page.
 =========================== */
 
-.sync-status-indicator {
+.sync-status-indicator-rail {
   position: fixed;
   top: var(--space-2);
-  right: var(--space-3);
+  left: 0;
+  right: 0;
   z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+  max-width: 1126px;
+  margin: 0 auto;
+  padding-right: var(--space-3);
   pointer-events: none;
+}
+
+.sync-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   color: var(--color-text-muted);
@@ -979,17 +1008,80 @@ button:disabled:hover {
   border-radius: var(--radius-pill);
   padding: var(--space-1) var(--space-3);
   box-shadow: var(--shadow-sm);
+  pointer-events: none;
+}
+
+/*
+  A small circular icon rather than text - persists indefinitely
+  (success/failure) or spins (in progress). Never fades; only the
+  text next to it does (see .sync-status-text-fading below).
+*/
+
+.sync-status-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+.sync-status-icon-spinner {
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-text-muted);
+  animation: sync-status-spin 800ms linear infinite;
+}
+
+.sync-status-icon-success,
+.sync-status-icon-failure {
+  position: relative;
+}
+
+.sync-status-icon-success {
+  background: var(--color-success);
+}
+
+.sync-status-icon-failure {
+  background: var(--color-danger);
+}
+
+.sync-status-icon-success::after,
+.sync-status-icon-failure::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: #fff;
+}
+
+.sync-status-icon-success::after {
+  content: '\2713';
+}
+
+.sync-status-icon-failure::after {
+  content: '\2715';
+}
+
+@keyframes sync-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sync-status-text {
+  white-space: nowrap;
   opacity: 1;
   transition: opacity 400ms ease;
 }
 
-.sync-status-indicator-error {
+.sync-status-text-error {
   color: var(--color-danger-strong);
-  border-color: var(--color-danger-border);
-  background: var(--color-danger-bg);
 }
 
-.sync-status-indicator-fading {
+.sync-status-text-fading {
   opacity: 0;
 }
 
