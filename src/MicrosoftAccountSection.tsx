@@ -19,6 +19,7 @@ import {
   subscribeCloudSyncStatus,
   requestCloudSync,
 } from './cloudSyncScheduler'
+import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { formatDate } from './format'
 
 /*
@@ -178,16 +179,35 @@ export default function MicrosoftAccountSection() {
 
       setError(result.error)
 
-    } else {
+    } else if (result.account) {
+
+      /*
+        Phase 4: reconcile which account this device's local synced
+        data currently belongs to BEFORE requesting a sync, same
+        reasoning and same reload-after-quarantine pattern as App.tsx's
+        own app-load effect (see that effect's comment for the full
+        explanation, and cloudSyncEngine.ts's reconcileSyncedAccount()
+        for why a reload is needed at all here). A signed-in account is
+        guaranteed by this branch (result.error is null), by construction
+        - the `else if (result.account)` (rather than a plain `else`) is
+        only here so TypeScript can narrow SignInResult's discriminated
+        union itself, which it can't do from a truthiness check on
+        result.error alone (that field's type is `string | null`, and an
+        empty string would also be falsy without actually meaning
+        "success").
+      */
+      if (
+        reconcileSyncedAccount(result.account.homeAccountId) === 'switched-account'
+      ) {
+        window.location.reload()
+        return
+      }
 
       /*
         Phase 2: a fresh sign-in is one of the two new automatic sync
         triggers (the other is app load, see App.tsx) - reconcile with
         the cloud immediately rather than waiting for the next
-        unrelated patient/treatment/template mutation. No "signed in?"
-        guard needed here (unlike App.tsx's app-load trigger) - a
-        successful result with no error means an account now exists,
-        by construction.
+        unrelated patient/treatment/template mutation.
       */
       requestCloudSync()
 

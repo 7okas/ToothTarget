@@ -28,6 +28,7 @@ import {
 } from './patientNumberConflicts'
 import { requestCloudSync, requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
+import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
 
 export type TemplatePhase = {
@@ -3647,9 +3648,42 @@ const [conflictResolutionError, setConflictResolutionError] =
     "MSAL might still be initializing" window during this component's
     own mount. A later, in-session popup sign-in is a separate trigger
     (see MicrosoftAccountSection.tsx's handleSignIn()), not this one.
+
+    ACCOUNT-SWITCH ISOLATION (Phase 4) - reconcileSyncedAccount() is
+    called first, before ever requesting a sync, so a device that's
+    signing in with a DIFFERENT Microsoft account than whatever this
+    device's local data currently belongs to never gets a chance to
+    merge that stale data into the new account's cloud document (see
+    cloudSyncEngine.ts's own header comment on this function for the
+    full reasoning). If it reports a switch just happened, local
+    synced data has already been quarantined (see
+    cloudSyncEngine.ts) - but this component's own React state above
+    was already initialized from the OUTGOING account's data by the
+    migration effect that ran just before this one, so it would still
+    show that stale data on screen even though the underlying
+    localStorage is already correct. Reloading - the same pattern
+    cloudBackup.ts's own applyCloudRestore() already uses after any
+    other bulk local-data replacement - guarantees this component
+    remounts from the now-quarantined, correctly-empty state instead
+    of leaving mismatched data on screen. The reload also means this
+    effect runs again from scratch, where reconcileSyncedAccount()
+    will see the account it just recorded and take the normal
+    'same-account' path, requesting the new account's real sync.
   */
   useEffect(() => {
-    requestCloudSyncIfSignedIn(Boolean(getActiveAccount()))
+
+    const account = getActiveAccount()
+
+    if (
+      account &&
+      reconcileSyncedAccount(account.homeAccountId) === 'switched-account'
+    ) {
+      window.location.reload()
+      return
+    }
+
+    requestCloudSyncIfSignedIn(Boolean(account))
+
   }, [])
 
 
