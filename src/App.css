@@ -953,6 +953,48 @@ button:disabled:hover {
 
 
 /* ===========================
+   Sync status indicator (fixed, top-right, every screen)
+
+   Sits in .app's own outer padding gutter (--space-8, or the smaller
+   value each breakpoint below uses), never inside the centered,
+   max-width 700px .top-header content every screen already uses -
+   confirmed clear of the back button/title/patient name/timer on the
+   Patient, Timer, and Settings screens. pointer-events: none since
+   it's purely informational and must never intercept a tap on an
+   iPad. z-index kept below .modal-overlay's (100) so an open modal's
+   backdrop still covers it, same as everything else on the page.
+=========================== */
+
+.sync-status-indicator {
+  position: fixed;
+  top: var(--space-2);
+  right: var(--space-3);
+  z-index: 40;
+  pointer-events: none;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
+  box-shadow: var(--shadow-sm);
+  opacity: 1;
+  transition: opacity 400ms ease;
+}
+
+.sync-status-indicator-error {
+  color: var(--color-danger-strong);
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-bg);
+}
+
+.sync-status-indicator-fading {
+  opacity: 0;
+}
+
+
+/* ===========================
    Delete patient
 =========================== */
 
