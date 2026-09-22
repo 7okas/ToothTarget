@@ -170,6 +170,7 @@ function isValidSyncProcedure(value: unknown): value is Procedure {
 const VALID_TOMBSTONE_ENTITY_TYPES: DeletionTombstone['entityType'][] = [
   'patient',
   'procedureTemplate',
+  'treatment',
 ]
 
 function isValidSyncTombstone(value: unknown): value is DeletionTombstone {

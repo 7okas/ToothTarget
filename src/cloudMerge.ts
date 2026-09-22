@@ -447,6 +447,12 @@ export function mergeCloudSyncDocuments(
       .map(tombstone => tombstone.entityId)
   )
 
+  const tombstonedTreatmentIds = new Set(
+    mergedTombstones
+      .filter(tombstone => tombstone.entityType === 'treatment')
+      .map(tombstone => tombstone.entityId)
+  )
+
   /*
     PATIENTS - union by id, then tombstones win regardless of which
     side they came from (section 9): a patient present as a live
@@ -470,9 +476,12 @@ export function mergeCloudSyncDocuments(
   const patientNumberConflicts = findPatientNumberConflicts(survivingPatients)
 
   /*
-    SAVED TREATMENTS - union by id, then suppressed if they belong to
-    a tombstoned patient (section 8). A treatment is never itself
-    tombstoned; only its owning patient's tombstone can remove it.
+    SAVED TREATMENTS - union by id, then suppressed either if they
+    belong to a tombstoned patient (section 8) or if the treatment
+    itself was directly tombstoned (eg. an orphaned record with no
+    matching patient, cleaned up by App.tsx's own load-time migration -
+    see DeletionTombstone['entityType'] for why 'treatment' exists
+    alongside 'patient'/'procedureTemplate').
   */
 
   const unionedSavedTreatments = unionById(
@@ -482,7 +491,9 @@ export function mergeCloudSyncDocuments(
   )
 
   const survivingSavedTreatments = unionedSavedTreatments.filter(
-    treatment => !tombstonedPatientIds.has(treatment.patientId)
+    treatment =>
+      !tombstonedPatientIds.has(treatment.patientId) &&
+      !tombstonedTreatmentIds.has(treatment.id)
   )
 
   /*

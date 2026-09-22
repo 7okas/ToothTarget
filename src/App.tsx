@@ -192,7 +192,7 @@ export type Patient = {
 
 export type DeletionTombstone = {
   id: string
-  entityType: 'patient' | 'procedureTemplate'
+  entityType: 'patient' | 'procedureTemplate' | 'treatment'
   entityId: string
   deletedAt: string
 }
@@ -1458,7 +1458,8 @@ function isValidTombstone(value: unknown): value is DeletionTombstone {
     typeof (value as DeletionTombstone).id === 'string' &&
     (value as DeletionTombstone).id.trim() !== '' &&
     ((value as DeletionTombstone).entityType === 'patient' ||
-      (value as DeletionTombstone).entityType === 'procedureTemplate') &&
+      (value as DeletionTombstone).entityType === 'procedureTemplate' ||
+      (value as DeletionTombstone).entityType === 'treatment') &&
     typeof (value as DeletionTombstone).entityId === 'string' &&
     (value as DeletionTombstone).entityId.trim() !== '' &&
     typeof (value as DeletionTombstone).deletedAt === 'string'
@@ -1742,6 +1743,168 @@ function migratePatientTimestamps(
   })
 
   return { patients: migratedPatients, changed }
+
+}
+
+/*
+  TREATMENT patientName MIGRATION (cloud sync hardening)
+
+  Every other legacy field a saved/incomplete/active treatment can be
+  missing already gets a defensive fallback where treatments are first
+  loaded above (toothId, procedureName, patientId, procedureId,
+  templateId, templateName) - patientName never did. A treatment
+  stored before patientName was reliably written, or corrupted in any
+  other way, can end up with a patientName that isn't a real string,
+  which the cloud sync schema (cloudSync.ts's isValidSyncSavedTreatment)
+  requires and correctly does not relax - that mismatch is exactly what
+  surfaced as a real 'validation-failed' sync failure.
+
+  Runs after patients are fully migrated (finalPatients, in the load
+  effect below), so a treatment whose patientId still resolves to a
+  real patient gets its real, current name back - never a guess. Only
+  a treatment whose patientId resolves to nothing at all (deleted
+  patient, or patientId itself never valid) falls back to a clearly-
+  fake placeholder name; those are reported via `fallbackTreatmentIds`
+  rather than silently accepted, since a fabricated name isn't real
+  data and may warrant deleting that treatment instead.
+*/
+
+const UNKNOWN_PATIENT_NAME_FALLBACK = 'Unknown Patient'
+
+function backfillTreatmentPatientName<
+  T extends { id: string; patientId: string; patientName: unknown }
+>(
+  treatment: T,
+  patientsById: Map<string, Patient>
+): { treatment: T; changed: boolean; usedFallback: boolean } {
+
+  if (
+    typeof treatment.patientName === 'string' &&
+    treatment.patientName.trim() !== ''
+  ) {
+    return { treatment, changed: false, usedFallback: false }
+  }
+
+  const matchedPatient = patientsById.get(treatment.patientId)
+
+  if (matchedPatient) {
+    return {
+      treatment: { ...treatment, patientName: matchedPatient.name },
+      changed: true,
+      usedFallback: false,
+    }
+  }
+
+  return {
+    treatment: { ...treatment, patientName: UNKNOWN_PATIENT_NAME_FALLBACK },
+    changed: true,
+    usedFallback: true,
+  }
+
+}
+
+function migrateTreatmentPatientNames<
+  T extends { id: string; patientId: string; patientName: unknown }
+>(
+  treatments: T[],
+  patients: Patient[]
+): { treatments: T[]; changed: boolean; fallbackTreatmentIds: string[] } {
+
+  const patientsById = new Map(patients.map(patient => [patient.id, patient]))
+
+  let changed = false
+  const fallbackTreatmentIds: string[] = []
+
+  const migratedTreatments = treatments.map(treatment => {
+
+    const result = backfillTreatmentPatientName(treatment, patientsById)
+
+    if (result.changed) {
+      changed = true
+    }
+
+    if (result.usedFallback) {
+      fallbackTreatmentIds.push(treatment.id)
+    }
+
+    return result.treatment
+
+  })
+
+  return { treatments: migratedTreatments, changed, fallbackTreatmentIds }
+
+}
+
+/*
+  SAVED TREATMENT patientName MIGRATION - ORPHAN REMOVAL VARIANT
+
+  Saved treatments get stricter handling than incomplete/active ones
+  above: a saved treatment is a permanent history record that's part of
+  the cloud-synchronized dataset, so a fabricated "Unknown Patient"
+  name is not an acceptable long-term state for it - unlike the
+  fallback name, which only exists to keep a broken local-only record
+  from crashing the app. If a saved treatment's patientId doesn't
+  resolve to any currently-existing patient (the patient was deleted,
+  or the id was never valid), the treatment is removed outright and
+  tombstoned (entityType: 'treatment') so the deletion is honest,
+  propagates through cloud sync, and the record can never silently
+  reappear via a merge with another device's older copy of it.
+
+  IMPORTANT: a saved treatment whose patientName is exactly
+  UNKNOWN_PATIENT_NAME_FALLBACK is treated the SAME as one with no
+  patientName at all, not as "already fine." An earlier build of this
+  app's migration only renamed orphaned saved treatments to that
+  placeholder instead of removing them - any treatment that already
+  went through that older logic and got persisted with that literal
+  string would otherwise look like a perfectly valid string here
+  (non-empty, a real string) and be silently kept forever, never
+  reaching the removal/tombstone path below. Checking for the sentinel
+  value explicitly lets this migration self-heal that already-persisted
+  state too, not just a genuinely-missing patientName. (The one
+  theoretical false positive - a real patient actually named literally
+  "Unknown Patient" - is accepted as a vanishingly unlikely tradeoff.)
+*/
+
+function migrateSavedTreatmentPatientNames(
+  treatments: SavedTreatment[],
+  patients: Patient[]
+): {
+  treatments: SavedTreatment[]
+  changed: boolean
+  orphanedTreatmentIds: string[]
+} {
+
+  const patientsById = new Map(patients.map(patient => [patient.id, patient]))
+
+  let changed = false
+  const orphanedTreatmentIds: string[] = []
+  const survivingTreatments: SavedTreatment[] = []
+
+  for (const treatment of treatments) {
+
+    if (
+      typeof treatment.patientName === 'string' &&
+      treatment.patientName.trim() !== '' &&
+      treatment.patientName !== UNKNOWN_PATIENT_NAME_FALLBACK
+    ) {
+      survivingTreatments.push(treatment)
+      continue
+    }
+
+    changed = true
+
+    const matchedPatient = patientsById.get(treatment.patientId)
+
+    if (matchedPatient) {
+      survivingTreatments.push({ ...treatment, patientName: matchedPatient.name })
+      continue
+    }
+
+    orphanedTreatmentIds.push(treatment.id)
+
+  }
+
+  return { treatments: survivingTreatments, changed, orphanedTreatmentIds }
 
 }
 
@@ -3224,17 +3387,93 @@ const [conflictResolutionError, setConflictResolutionError] =
 
       const finalPatients = patientTimestampResult.patients
 
+      /*
+        See migrateSavedTreatmentPatientNames()/migrateTreatmentPatientNames()
+        above. Saved treatments use the stricter orphan-removal variant
+        (they're part of the cloud-synchronized dataset - a fabricated
+        name isn't acceptable long-term); incomplete/active treatments
+        are local-only, so the fallback-name variant is enough to keep
+        them from crashing the app.
+      */
+
+      const savedTreatmentNameResult =
+        migrateSavedTreatmentPatientNames(
+          migratedIdentity.savedTreatments,
+          finalPatients
+        )
+
+      const incompleteTreatmentNameResult =
+        migrateTreatmentPatientNames(
+          migratedIdentity.incompleteTreatments,
+          finalPatients
+        )
+
+      const activeTreatmentNameResult =
+        migratedIdentity.activeTreatment
+          ? backfillTreatmentPatientName(
+              migratedIdentity.activeTreatment,
+              new Map(finalPatients.map(patient => [patient.id, patient]))
+            )
+          : null
+
+      const finalSavedTreatments = savedTreatmentNameResult.treatments
+      const finalIncompleteTreatments = incompleteTreatmentNameResult.treatments
+      const finalActiveTreatment =
+        activeTreatmentNameResult?.treatment ?? migratedIdentity.activeTreatment
+
+      /*
+        Each orphaned saved treatment is tombstoned (never just dropped
+        silently) so its removal propagates through cloud sync instead
+        of reappearing from another device's older copy on a future
+        merge. appendTombstone() already reads/writes
+        toothTargetDeletionTombstones directly - the same helper
+        confirmDeletePatient()/confirmDeleteTemplate() use - so this
+        needs no new persistence logic of its own.
+      */
+
+      for (const orphanedId of savedTreatmentNameResult.orphanedTreatmentIds) {
+        appendTombstone('treatment', orphanedId)
+      }
+
+      if (savedTreatmentNameResult.orphanedTreatmentIds.length > 0) {
+
+        console.log(
+          `Removed ${savedTreatmentNameResult.orphanedTreatmentIds.length} saved treatment(s) with no matching patient (tombstoned): ${savedTreatmentNameResult.orphanedTreatmentIds.join(', ')}`
+        )
+
+      }
+
+      const patientNameFallbackTreatmentIds = [
+        ...incompleteTreatmentNameResult.fallbackTreatmentIds,
+        ...(activeTreatmentNameResult?.usedFallback
+          ? [migratedIdentity.activeTreatment!.id]
+          : []),
+      ]
+
+      if (patientNameFallbackTreatmentIds.length > 0) {
+
+        console.log(
+          `Backfilled patientName with "${UNKNOWN_PATIENT_NAME_FALLBACK}" for ${patientNameFallbackTreatmentIds.length} treatment(s) whose patient no longer exists: ${patientNameFallbackTreatmentIds.join(', ')}`
+        )
+
+      }
+
+      const patientNameMigrationChanged =
+        savedTreatmentNameResult.changed ||
+        incompleteTreatmentNameResult.changed ||
+        (activeTreatmentNameResult?.changed ?? false)
+
       setSavedPatients(finalPatients)
-      setSavedTreatments(migratedIdentity.savedTreatments)
-      setIncompleteTreatments(migratedIdentity.incompleteTreatments)
+      setSavedTreatments(finalSavedTreatments)
+      setIncompleteTreatments(finalIncompleteTreatments)
 
       setPatientNumberConflicts(
         reconcileAndPersistPatientNumberConflicts(finalPatients)
       )
 
-      if (migratedIdentity.activeTreatment) {
+      if (finalActiveTreatment) {
 
-        setActiveTreatment(migratedIdentity.activeTreatment)
+        setActiveTreatment(finalActiveTreatment)
 
         /*
           Prompt once per app open (this effect only runs on mount)
@@ -3271,7 +3510,8 @@ const [conflictResolutionError, setConflictResolutionError] =
         migratedIdentity.changed ||
         patientTimestampResult.changed ||
         treatmentIdMigrationChanged ||
-        templateProcedureIdMigrationChanged
+        templateProcedureIdMigrationChanged ||
+        patientNameMigrationChanged
       ) {
 
         localStorage.setItem(
@@ -3281,30 +3521,37 @@ const [conflictResolutionError, setConflictResolutionError] =
 
         localStorage.setItem(
           'toothTargetSavedTreatments',
-          JSON.stringify(migratedIdentity.savedTreatments)
+          JSON.stringify(finalSavedTreatments)
         )
 
         localStorage.setItem(
           'toothTargetIncompleteTreatments',
-          JSON.stringify(migratedIdentity.incompleteTreatments)
+          JSON.stringify(finalIncompleteTreatments)
         )
 
-        if (migratedIdentity.activeTreatment) {
+        if (finalActiveTreatment) {
 
           localStorage.setItem(
             'toothTargetActiveTreatment',
-            JSON.stringify(migratedIdentity.activeTreatment)
+            JSON.stringify(finalActiveTreatment)
           )
 
         }
 
       }
 
-    } catch {
+    } catch (error) {
 
       console.log(
         'Could not migrate patient identity.'
       )
+
+      /*
+        Logs the actual error (previously discarded by a bare `catch {}`)
+        so a real failure here is diagnosable from the console instead of
+        silently falling back with no trace at all.
+      */
+      console.error('Patient-identity migration failed - falling back to unmigrated data.', error)
 
       /*
         Fall back to whatever was already shaped above, unmigrated -
