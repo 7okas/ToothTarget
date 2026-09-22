@@ -1076,13 +1076,26 @@ button:disabled:hover {
    first-sync-of-session only
 
    Separate and more prominent than the small top-right badge above -
-   a centered card rather than a corner pill - but reuses the exact
-   same fade-out mechanics (400ms opacity transition, a `-fading`
-   modifier class) for visual consistency with it. pointer-events:
-   none for the same reason as the badge: purely informational, must
-   never intercept a tap. z-index sits above the badge (40) since it's
-   meant to be the more prominent of the two, but still below
-   .modal-overlay's (100).
+   a large, clearly-defined centered card rather than a corner pill -
+   but reuses the exact same fade-out mechanics (400ms opacity
+   transition, a `-fading` modifier class) for visual consistency with
+   it. pointer-events: none for the same reason as the badge: purely
+   informational, must never intercept a tap. z-index sits above the
+   badge (40) since it's meant to be the more prominent of the two,
+   but still below .modal-overlay's (100).
+
+   Sizing/contrast deliberately pushed further than the badge or even
+   .modal-card - this is the ONE moment the app most needs to avoid
+   looking blank/broken (the very first load), so it earns being the
+   most visually assertive floating element on the page. Colors still
+   come from the same --color-* token set every other card in the app
+   uses (--color-surface background, --color-border-strong border) -
+   checked App.css for a prefers-color-scheme: dark block before
+   adding one of my own and found none anywhere in this file (unlike
+   index.css's now-mostly-removed template tokens, which did have a
+   dark variant) - every card/badge in this app, including this one,
+   is currently light-mode-only by design, so a dark-mode override
+   here alone would be an inconsistent special case, not a fix.
 =========================== */
 
 .startup-sync-overlay {
@@ -1093,15 +1106,15 @@ button:disabled:hover {
   z-index: 60;
   display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-base);
-  font-weight: var(--weight-medium);
+  gap: var(--space-4);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
   color: var(--color-text);
   background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  border: 2px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
-  padding: var(--space-4) var(--space-6);
-  box-shadow: var(--shadow-md);
+  padding: var(--space-6) var(--space-8);
+  box-shadow: 0 20px 50px rgba(20, 23, 28, 0.28), 0 4px 12px rgba(20, 23, 28, 0.16);
   pointer-events: none;
   opacity: 1;
   transition: opacity 400ms ease;
@@ -1122,13 +1135,13 @@ button:disabled:hover {
 .startup-sync-icon {
   display: inline-block;
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
 }
 
 .startup-sync-icon-spinner {
-  border: 3px solid var(--color-border-strong);
+  border: 4px solid var(--color-border-strong);
   border-top-color: var(--color-text-muted);
   animation: sync-status-spin 800ms linear infinite;
 }
@@ -1154,7 +1167,7 @@ button:disabled:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 22px;
   line-height: 1;
   color: #fff;
 }
