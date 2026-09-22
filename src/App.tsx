@@ -3441,6 +3441,17 @@ const [conflictResolutionError, setConflictResolutionError] =
           `Removed ${savedTreatmentNameResult.orphanedTreatmentIds.length} saved treatment(s) with no matching patient (tombstoned): ${savedTreatmentNameResult.orphanedTreatmentIds.join(', ')}`
         )
 
+        /*
+          Every other tombstone-writing mutation in the app (patient
+          deletion, template deletion) requests a sync immediately
+          after committing its tombstone - this load-time cleanup
+          should be no different, or the tombstone sits local-only
+          until some unrelated mutation happens to trigger the next
+          sync. Gated on orphanedTreatmentIds.length so a normal load
+          with nothing to clean up never fires a sync on its own.
+        */
+        requestCloudSync()
+
       }
 
       const patientNameFallbackTreatmentIds = [
