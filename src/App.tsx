@@ -26,6 +26,7 @@ import {
   reconcileAndPersistPatientNumberConflicts,
   resolvePatientNumberConflict,
 } from './patientNumberConflicts'
+import { planPatientDeletionCascade } from './patientDeletionCascade'
 import { requestCloudSync, requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
@@ -2728,6 +2729,9 @@ const [conflictResolutionError, setConflictResolutionError] =
 
   const [showDeleteConfirm, setShowDeleteConfirm] =
     useState(false)
+
+  const [deletePatientBlockedReason, setDeletePatientBlockedReason] =
+    useState<string | null>(null)
 
   const [editingTemplateId, setEditingTemplateId] =
     useState<string | null>(null)
@@ -5888,17 +5892,58 @@ async function openPatient(
   */
 
   function requestDeletePatient() {
+    setDeletePatientBlockedReason(null)
     setShowDeleteConfirm(true)
   }
 
   function cancelDeletePatient() {
     setShowDeleteConfirm(false)
+    setDeletePatientBlockedReason(null)
   }
 
   async function confirmDeletePatient() {
 
     const nameToDelete =
       selectedPatient.toLowerCase()
+
+    const patientToDelete =
+      savedPatients.find(
+        patient => patient.name.toLowerCase() === nameToDelete
+      )
+
+    /*
+      CASCADE PLAN (Phase 4.5)
+
+      planPatientDeletionCascade() (patientDeletionCascade.ts) is the
+      single source of truth for what a patient deletion does to their
+      treatments, including the active-treatment block - see that
+      file's own header comment for the full reasoning. Collections
+      are read fresh from localStorage here, not this tab's own
+      possibly-stale savedTreatments/incompleteTreatments/
+      activeTreatment state, same reasoning as every other collection
+      re-read in this file.
+    */
+
+    const cascadePlan = planPatientDeletionCascade({
+      patientToDelete:
+        patientToDelete
+          ? { id: patientToDelete.id, name: patientToDelete.name }
+          : undefined,
+      nameToDelete,
+      savedTreatments: readPersistedSavedTreatments(),
+      incompleteTreatments: readPersistedIncompleteTreatments(),
+      activeTreatment: readPersistedActiveTreatment(),
+    })
+
+    if (cascadePlan.blocked) {
+
+      setDeletePatientBlockedReason(cascadePlan.reason)
+
+      return
+
+    }
+
+    setDeletePatientBlockedReason(null)
 
     /*
       PATIENT REGISTRY
@@ -5916,11 +5961,6 @@ async function openPatient(
       reused. A deletion tombstone for the same UUID is recorded as
       part of the same locked operation - see removePatientFromCurrentList().
     */
-
-    const patientToDelete =
-      savedPatients.find(
-        patient => patient.name.toLowerCase() === nameToDelete
-      )
 
     const registryResult =
       patientToDelete
@@ -5945,90 +5985,43 @@ async function openPatient(
     )
 
     /*
-      TREATMENT / HISTORY CLEANUP
-
-      Identified by the deleted patient's UUID whenever a treatment
-      has one - which every treatment does, once
-      migratePatientIdentity() has run on load - so this can never
-      accidentally catch a different patient who happens to share a
-      name. Only falls back to the historical case-insensitive name
-      rule for a treatment that somehow still lacks a valid
-      patientId (data that predates this app's own UUID migration
-      and was never reloaded through it), so old records are never
-      silently skipped just because they predate the UUID.
-
-      Each collection is also re-read fresh from localStorage right
-      before filtering+writing, rather than trusting this tab's own
-      (possibly stale) savedTreatments/incompleteTreatments/
-      activeTreatment state - see readPersistedSavedTreatments() etc.
-      above for why.
+      TREATMENT / HISTORY CLEANUP (Phase 4.5 - now tombstones saved
+      treatments too, applying the plan computed above)
     */
 
-    function belongsToDeletedPatient(
-      treatment: { patientId: string; patientName: string }
-    ): boolean {
-
-      if (
-        patientToDelete &&
-        typeof treatment.patientId === 'string' &&
-        treatment.patientId !== ''
-      ) {
-        return treatment.patientId === patientToDelete.id
-      }
-
-      return treatment.patientName.toLowerCase() === nameToDelete
-
-    }
-
-    const currentSavedTreatments = readPersistedSavedTreatments()
-
-    const updatedTreatments =
-      currentSavedTreatments.filter(
-        treatment => !belongsToDeletedPatient(treatment)
-      )
-
-    setSavedTreatments(updatedTreatments)
+    setSavedTreatments(cascadePlan.survivingSavedTreatments)
 
     localStorage.setItem(
       'toothTargetSavedTreatments',
-      JSON.stringify(updatedTreatments)
+      JSON.stringify(cascadePlan.survivingSavedTreatments)
     )
 
+    /*
+      Each removed saved treatment is tombstoned (never just dropped
+      silently) so its removal propagates through cloud sync instead
+      of reappearing from another device's older copy on a future
+      merge - the exact same pattern the orphaned-treatment cleanup
+      migration already uses (see this file's own load-time migration
+      effect and appendTombstone()'s own comment). Without this, a
+      synced device would simply re-merge the "deleted" treatment back
+      in on its next sync, since a plain removal here has nothing to
+      tell the merge engine it was intentional.
+    */
 
-    const currentActiveTreatment = readPersistedActiveTreatment()
-
-    if (
-      currentActiveTreatment &&
-      belongsToDeletedPatient(currentActiveTreatment)
-    ) {
-
-      setActiveTreatment(null)
-
-      localStorage.removeItem(
-        'toothTargetActiveTreatment'
-      )
-
+    for (const removedId of cascadePlan.removedSavedTreatmentIds) {
+      appendTombstone('treatment', removedId)
     }
 
-
-    const currentIncompleteTreatments =
-      readPersistedIncompleteTreatments()
-
-    const updatedIncomplete =
-      currentIncompleteTreatments.filter(
-        treatment => !belongsToDeletedPatient(treatment)
-      )
-
-    setIncompleteTreatments(updatedIncomplete)
+    setIncompleteTreatments(cascadePlan.survivingIncompleteTreatments)
 
     localStorage.setItem(
       'toothTargetIncompleteTreatments',
-      JSON.stringify(updatedIncomplete)
+      JSON.stringify(cascadePlan.survivingIncompleteTreatments)
     )
 
     /*
       One coalesced sync request for the whole deletion transaction
-      (patient registry + saved-treatment cleanup + tombstone), fired
+      (patient registry + saved-treatment cleanup + tombstones), fired
       only once everything above has already committed successfully -
       never between the individual steps. Skipped entirely when
       registryResult.deleted is false (eg. another tab already deleted
@@ -7657,8 +7650,15 @@ const patientTreatments =
               </h2>
 
               <p>
-                This action cannot be undone.
+                This also deletes all of this patient's saved and
+                incomplete treatments. This action cannot be undone.
               </p>
+
+              {deletePatientBlockedReason && (
+                <p className="conflict-resolution-error">
+                  {deletePatientBlockedReason}
+                </p>
+              )}
 
               <div className="modal-actions">
 
