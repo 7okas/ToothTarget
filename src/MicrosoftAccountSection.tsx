@@ -7,7 +7,6 @@ import {
   subscribeToActiveAccount,
 } from './auth'
 import { testCloudStorage, type CloudStorageTestResult } from './graphTest'
-import { testCloudDataFile, type CloudDataFileTestResult } from './cloudStorageTest'
 import { readCloudData, writeCloudData } from './cloudStorage'
 import {
   createCloudBackup,
@@ -141,20 +140,6 @@ export default function MicrosoftAccountSection() {
 
   const [cloudTestResult, setCloudTestResult] =
     useState<CloudStorageTestResult | null>(null)
-
-  /*
-    TEMPORARY - cloudStorage.ts (readCloudData/writeCloudData)
-    round-trip test. Same isolation as the block above: these two
-    pieces of state, handleTestCloudDataFile(), and the one
-    button/result block below - remove all three plus
-    cloudStorageTest.ts to take this back out later.
-  */
-
-  const [cloudDataTestBusy, setCloudDataTestBusy] =
-    useState(false)
-
-  const [cloudDataTestResult, setCloudDataTestResult] =
-    useState<CloudDataFileTestResult | null>(null)
 
   useEffect(() => {
 
@@ -313,22 +298,6 @@ export default function MicrosoftAccountSection() {
 
   }
 
-  /*
-    TEMPORARY - see the state declarations above.
-  */
-
-  async function handleTestCloudDataFile() {
-
-    setCloudDataTestResult(null)
-    setCloudDataTestBusy(true)
-
-    const result = await testCloudDataFile()
-
-    setCloudDataTestBusy(false)
-    setCloudDataTestResult(result)
-
-  }
-
   return (
 
     <>
@@ -338,11 +307,12 @@ export default function MicrosoftAccountSection() {
       </h2>
 
       <p className="settings-section-description">
-        Sign in with Microsoft to back up your patients and completed
-        treatments to your OneDrive App Folder, or restore them on
-        another device. This is a manual snapshot, not automatic
-        syncing - nothing is uploaded or changed until you press one
-        of the buttons below.
+        Sign in with Microsoft to keep your patients, treatments,
+        templates, and procedures backed up automatically to your
+        OneDrive App Folder in the background - no button needed.
+        "Backup to Cloud" and "Load from Cloud" below are separate: a
+        manual, full snapshot you can take any time, such as before a
+        big change or just for extra peace of mind.
       </p>
 
       {!isReady && (
@@ -448,40 +418,6 @@ export default function MicrosoftAccountSection() {
               }
             >
               {cloudTestResult.message}
-            </p>
-
-          )}
-
-          {/*
-            TEMPORARY - cloudStorage.ts read/write round-trip test.
-            See cloudStorageTest.ts. Safe to delete this block (and
-            that file) once real backup/sync is actually implemented.
-          */}
-
-          <div className="options-menu-list settings-actions">
-
-            <button
-              type="button"
-              onClick={handleTestCloudDataFile}
-              disabled={cloudDataTestBusy}
-            >
-              {cloudDataTestBusy
-                ? 'Testing Cloud Data File…'
-                : 'Test Cloud Data File'}
-            </button>
-
-          </div>
-
-          {cloudDataTestResult && (
-
-            <p
-              className={
-                cloudDataTestResult.success
-                  ? 'settings-section-description privacy-lock-status'
-                  : 'settings-error-message'
-              }
-            >
-              {cloudDataTestResult.message}
             </p>
 
           )}
