@@ -955,48 +955,33 @@ button:disabled:hover {
 /* ===========================
    Sync status indicator (fixed, top-right, every screen)
 
-   .sync-status-indicator-rail is the positioning layer: fixed to the
-   VIEWPORT vertically (so it stays visible while a screen's content
-   scrolls - this is meant to be persistent, not something that
-   scrolls away), but its own width is capped at 1126px and centered
-   exactly like index.css's `#root { width: 1126px; max-width: 100%;
-   margin: 0 auto }` - the actual app-content boundary. justify-content:
-   flex-end then pins the real badge to THAT box's right edge, not the
-   raw browser viewport's - so on a wide desktop window (where index.css's
-   leftover template width leaves empty side gutters outside #root, see
-   this project's Part 1 investigation notes on that file) the badge
-   still lines up with the visible app content instead of sitting out
-   in the empty margin. The 1126px figure is a deliberate duplicate of
-   index.css's #root width, not a new constraint of its own - if #root's
-   width/centering ever changes, this must change with it.
+   Anchored directly to the VIEWPORT's own top-right corner. This used
+   to need an extra centered/capped "rail" wrapper to compensate for
+   index.css's leftover `#root { width: 1126px; ... }` template rule,
+   which constrained the app's actual content to a narrower centered
+   column than the viewport on wide desktop windows - now that that
+   rule has been removed (see index.css and this project's Part 1/
+   width-gutter cleanup notes), #root's content genuinely fills the
+   viewport, so the viewport edge IS the content boundary again and
+   this can stay simple.
 
    Confirmed clear of the back button/title/patient name/timer on the
-   Patient, Timer, and Settings screens either way: .top-header is
-   itself centered with its own max-width: 700px, well inside the
-   1126px rail, so the badge in the rail's top-right corner never
-   overlaps it.
+   Patient, Timer, and Settings screens: .top-header is itself centered
+   with its own max-width: 700px, always well short of the viewport's
+   right edge on any realistic screen width, so the badge in the
+   corner never overlaps it.
 
-   pointer-events: none throughout since this is purely informational
-   and must never intercept a tap on an iPad. z-index kept below
+   pointer-events: none since this is purely informational and must
+   never intercept a tap on an iPad. z-index kept below
    .modal-overlay's (100) so an open modal's backdrop still covers it,
    same as everything else on the page.
 =========================== */
 
-.sync-status-indicator-rail {
+.sync-status-badge {
   position: fixed;
   top: var(--space-2);
-  left: 0;
-  right: 0;
+  right: var(--space-3);
   z-index: 40;
-  display: flex;
-  justify-content: flex-end;
-  max-width: 1126px;
-  margin: 0 auto;
-  padding-right: var(--space-3);
-  pointer-events: none;
-}
-
-.sync-status-badge {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);

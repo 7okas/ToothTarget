@@ -202,12 +202,10 @@ export default function SyncStatusIndicator() {
   */
   if (!account) {
     return (
-      <div className="sync-status-indicator-rail">
-        <div className="sync-status-badge">
-          <span className="sync-status-text sync-status-text-error">
-            Sign in needed
-          </span>
-        </div>
+      <div className="sync-status-badge">
+        <span className="sync-status-text sync-status-text-error">
+          Sign in needed
+        </span>
       </div>
     )
   }
@@ -218,31 +216,27 @@ export default function SyncStatusIndicator() {
 
   return (
 
-    <div className="sync-status-indicator-rail">
+    <div className="sync-status-badge">
 
-      <div className="sync-status-badge">
+      {state.icon && (
+        <span
+          className={`sync-status-icon sync-status-icon-${state.icon}`}
+          role="img"
+          aria-label={ICON_LABEL[state.icon]}
+        />
+      )}
 
-        {state.icon && (
-          <span
-            className={`sync-status-icon sync-status-icon-${state.icon}`}
-            role="img"
-            aria-label={ICON_LABEL[state.icon]}
-          />
-        )}
-
-        {state.text && (
-          <span
-            className={
-              'sync-status-text' +
-              (state.text.label === 'Sync error' ? ' sync-status-text-error' : '') +
-              (fading ? ' sync-status-text-fading' : '')
-            }
-          >
-            {state.text.label}
-          </span>
-        )}
-
-      </div>
+      {state.text && (
+        <span
+          className={
+            'sync-status-text' +
+            (state.text.label === 'Sync error' ? ' sync-status-text-error' : '') +
+            (fading ? ' sync-status-text-fading' : '')
+          }
+        >
+          {state.text.label}
+        </span>
+      )}
 
     </div>
 
