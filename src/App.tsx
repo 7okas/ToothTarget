@@ -24,7 +24,10 @@ import {
   isValidPatientNumberConflict,
   reconcilePatientNumberConflicts,
   reconcileAndPersistPatientNumberConflicts,
+  recordAndReconcilePatientNumberConflicts,
   resolvePatientNumberConflict,
+  computeNextPatientNumber,
+  detectPatientNumberConflict,
 } from './patientNumberConflicts'
 import { planPatientDeletionCascade } from './patientDeletionCascade'
 import { requestCloudSync, requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
@@ -163,6 +166,18 @@ export type Patient = {
   patientNumber: number
   name: string
   /*
+    Phase 4.6 addition - set once, at the moment a patient is first
+    created (allocatePatientUnderLock()), and never touched again by
+    anything, including an edit (editPatientRecordUnderLock()) or a
+    patient-number conflict resolution - unlike updatedAt below, which
+    DOES change on every one of those. Existing patients that predate
+    this field are backfilled once by migratePatientTimestamps(),
+    falling back to their own (already-resolved) updatedAt - an
+    honest approximation, not a recovered historical fact, since this
+    app never recorded a real creation time before now.
+  */
+  createdAt: string
+  /*
     Phase 8 addition - added for the exact same reason
     ProcedureTemplate gained one in Phase 2: a patient record is
     "immutable, create-only" in every normal local workflow, but
@@ -176,6 +191,10 @@ export type Patient = {
     (matching cloudSync.ts's validator); existing patients missing it
     are backfilled once by migratePatientTimestamps() below, exactly
     like migrateTemplateTimestamps() already does for templates.
+
+    Phase 4.6 note: also now updated on a direct name/number edit
+    (editPatientRecordUnderLock()), the same "any intentional content
+    change bumps updatedAt" principle this field has always followed.
   */
   updatedAt: string
 }
@@ -299,6 +318,25 @@ export type SavedTreatment = {
   currentPhaseIndex: number
   startedAt: string
   completedAt?: string
+  /*
+    Phase 4.6 addition - added for the exact same reason Patient
+    (Phase 8) and ProcedureTemplate (Phase 2) each gained one:
+    completing a treatment was this type's only mutation until now,
+    which is why cloudMerge.ts's own comment could previously call
+    SavedTreatment "create-only/immutable" and use a purely content-
+    based tiebreak for a same-id disagreement. Editing a completed
+    treatment's phase data (see confirmEditTreatmentPhases()) IS a
+    genuine, intentional content mutation, exactly like patient-number
+    conflict resolution is for Patient - without a timestamp,
+    cloudMerge.ts's same-id merge would have no honest way to prefer
+    the edit over a stale pre-edit copy still sitting in the cloud.
+    Set at completion time (same instant as completedAt) and bumped on
+    every edit; existing treatments missing it are backfilled once by
+    migrateSavedTreatmentTimestamps(), falling back to completedAt (or
+    date, if even that's missing) - an approximation, not a recovered
+    fact, same spirit as Patient.createdAt's own backfill.
+  */
+  updatedAt: string
 }
 
 type TemplateDraft = {
@@ -1393,11 +1431,18 @@ type PatientDraft = {
     already established).
   */
   updatedAt?: string
+  /*
+    Same carry-through-or-undefined treatment as updatedAt above -
+    backfilled once by migratePatientTimestamps() (Phase 4.6), which
+    falls back to the patient's own updatedAt once THAT is resolved,
+    never a fresh "now" (a true original creation time isn't
+    recoverable for data that predates this field).
+  */
+  createdAt?: string
 }
 
 type PatientMigrationInput = {
   rawPatients: unknown
-  rawNextPatientNumber: unknown
   savedTreatments: SavedTreatment[]
   incompleteTreatments: ActiveTreatment[]
   activeTreatment: ActiveTreatment | null
@@ -1473,7 +1518,6 @@ function isValidTombstone(value: unknown): value is DeletionTombstone {
 
 function migratePatientIdentity({
   rawPatients,
-  rawNextPatientNumber,
   savedTreatments,
   incompleteTreatments,
   activeTreatment,
@@ -1514,6 +1558,7 @@ function migratePatientIdentity({
       if (!byNormalizedName.has(key)) {
 
         const rawUpdatedAt = (entry as { updatedAt?: unknown }).updatedAt
+        const rawCreatedAt = (entry as { createdAt?: unknown }).createdAt
 
         byNormalizedName.set(key, {
           id: (entry as { id: string }).id,
@@ -1524,6 +1569,10 @@ function migratePatientIdentity({
           updatedAt:
             typeof rawUpdatedAt === 'string' && rawUpdatedAt.trim() !== ''
               ? rawUpdatedAt
+              : undefined,
+          createdAt:
+            typeof rawCreatedAt === 'string' && rawCreatedAt.trim() !== ''
+              ? rawCreatedAt
               : undefined,
         })
 
@@ -1590,23 +1639,23 @@ function migratePatientIdentity({
   /*
     PATIENT NUMBER ASSIGNMENT
 
-    A patientNumber is only ever handed out once, from a running
-    counter (nextPatientNumber) that's persisted separately
-    (toothTargetNextPatientNumber) and never decreases - not even
-    when a patient is deleted - so a number is never reused. The
-    counter's starting point is the larger of whatever was already
-    persisted and one past the highest patientNumber any existing
-    patient already has, so it's never accidentally set lower than
-    data that already exists (eg. on the very first run after this
-    feature ships, before toothTargetNextPatientNumber has ever been
-    written). Assignment order (for patients that don't have one yet)
-    follows patientDrafts' existing order, which is itself
-    deterministic given the same stored data - so a re-run against
-    unchanged data reassigns nothing and produces the same result.
-  */
+    A patientNumber is only ever handed out once and never decreases -
+    not even when a patient is deleted - so a number is never reused.
+    Assignment order (for patients that don't have one yet) follows
+    patientDrafts' existing order, which is itself deterministic given
+    the same stored data - so a re-run against unchanged data
+    reassigns nothing and produces the same result.
 
-  const storedNextPatientNumber =
-    readStoredPatientNumber(rawNextPatientNumber) ?? 1
+    PHASE 4.6 - DYNAMIC NUMBERING: the starting point is now purely one
+    past the highest patientNumber any existing patient already has -
+    rawNextPatientNumber (toothTargetNextPatientNumber) is no longer
+    consulted here at all. Now that a patient's number can be edited
+    directly, that stored counter can drift arbitrarily far behind
+    reality, and trusting it as a floor here could hand out a number
+    that collides with one a dentist manually assigned. See
+    allocatePatientUnderLock()'s own comment for the same reasoning
+    applied to normal (non-migration) patient creation.
+  */
 
   const highestAssignedPatientNumber =
     patientDrafts.reduce(
@@ -1618,16 +1667,16 @@ function migratePatientIdentity({
       0
     )
 
-  let nextPatientNumber =
-    Math.max(storedNextPatientNumber, highestAssignedPatientNumber + 1)
+  let nextPatientNumber = highestAssignedPatientNumber + 1
 
   const patients: Patient[] =
     patientDrafts.map(patient => {
 
       /*
-        updatedAt is intentionally left as `patient.updatedAt ?? ''`
-        here - never invented as "now" in this identity-migration pass.
-        An empty string fails isValidUpdatedAtTimestamp(), so it's
+        updatedAt/createdAt are intentionally left as
+        `patient.updatedAt ?? ''`/`patient.createdAt ?? ''` here - never
+        invented as "now" in this identity-migration pass. An empty
+        string fails isValidUpdatedAtTimestamp(), so both are
         immediately corrected by migratePatientTimestamps(), which runs
         right after this function returns, in the same synchronous load
         effect, before any state is set or anything renders.
@@ -1639,6 +1688,7 @@ function migratePatientIdentity({
           id: patient.id,
           patientNumber: patient.patientNumber,
           name: patient.name,
+          createdAt: patient.createdAt ?? '',
           updatedAt: patient.updatedAt ?? '',
         }
 
@@ -1654,6 +1704,7 @@ function migratePatientIdentity({
         id: patient.id,
         patientNumber: assignedNumber,
         name: patient.name,
+        createdAt: patient.createdAt ?? '',
         updatedAt: patient.updatedAt ?? '',
       }
 
@@ -1712,20 +1763,29 @@ function migratePatientIdentity({
 }
 
 /*
-  PATIENT updatedAt MIGRATION (Phase 8 - cloud sync hardening)
+  PATIENT updatedAt/createdAt MIGRATION (Phase 8 updatedAt, Phase 4.6
+  createdAt - cloud sync hardening)
 
   Runs immediately after migratePatientIdentity() (which never invents
   a timestamp itself - see its own patients: Patient[] construction
   above), in the same synchronous load effect, before any patient
-  state is set or rendered. Exactly mirrors
-  migrateTemplateTimestamps(): a patient missing a valid updatedAt
-  (including every one migratePatientIdentity() just built with the
-  temporary '' placeholder) is stamped with the current migration
-  time; a patient that already has one is returned completely
-  unchanged, so re-running this on every load never overwrites a real
-  prior value - in particular, never overwrites the fresh timestamp
-  patientNumber-conflict resolution (patientNumberConflicts.ts) or
+  state is set or rendered. Exactly mirrors migrateTemplateTimestamps()
+  for updatedAt: a patient missing a valid updatedAt (including every
+  one migratePatientIdentity() just built with the temporary ''
+  placeholder) is stamped with the current migration time; a patient
+  that already has one is returned completely unchanged, so re-running
+  this on every load never overwrites a real prior value - in
+  particular, never overwrites the fresh timestamp patientNumber-
+  conflict resolution (patientNumberConflicts.ts) or
   allocatePatientUnderLock() already set.
+
+  createdAt is handled differently, in the same pass: a patient
+  missing a valid createdAt falls back to its own updatedAt (already
+  resolved above, in this same map callback) - NEVER a fresh "now",
+  since that would fabricate a false claim that the patient was just
+  created. This is an honest approximation (the true original creation
+  time isn't recoverable for data that predates this field), not a
+  real historical fact - flagged explicitly in this phase's own report.
 */
 
 function migratePatientTimestamps(
@@ -1736,17 +1796,74 @@ function migratePatientTimestamps(
 
   const migratedPatients = patients.map(patient => {
 
-    if (isValidUpdatedAtTimestamp(patient.updatedAt)) {
+    const resolvedUpdatedAt =
+      isValidUpdatedAtTimestamp(patient.updatedAt)
+        ? patient.updatedAt
+        : new Date().toISOString()
+
+    const resolvedCreatedAt =
+      isValidUpdatedAtTimestamp(patient.createdAt)
+        ? patient.createdAt
+        : resolvedUpdatedAt
+
+    if (
+      resolvedUpdatedAt === patient.updatedAt &&
+      resolvedCreatedAt === patient.createdAt
+    ) {
       return patient
     }
 
     changed = true
 
-    return { ...patient, updatedAt: new Date().toISOString() }
+    return {
+      ...patient,
+      updatedAt: resolvedUpdatedAt,
+      createdAt: resolvedCreatedAt,
+    }
 
   })
 
   return { patients: migratedPatients, changed }
+
+}
+
+/*
+  SAVED TREATMENT updatedAt MIGRATION (Phase 4.6 - cloud sync
+  hardening, same reasoning as migratePatientTimestamps() above)
+
+  A saved treatment missing a valid updatedAt (every one that existed
+  before this field did) is backfilled using its own completedAt if
+  that's valid, or its date (always present, set at completion) as the
+  last-resort fallback - never "now", which would falsely claim a old
+  record was just edited. This runs as part of the same load-time
+  migration pipeline as the patientName backfill, over whatever that
+  pass already produced.
+*/
+
+function migrateSavedTreatmentTimestamps(
+  treatments: SavedTreatment[]
+): { treatments: SavedTreatment[]; changed: boolean } {
+
+  let changed = false
+
+  const migratedTreatments = treatments.map(treatment => {
+
+    if (isValidUpdatedAtTimestamp(treatment.updatedAt)) {
+      return treatment
+    }
+
+    changed = true
+
+    const fallbackUpdatedAt =
+      isValidUpdatedAtTimestamp(treatment.completedAt)
+        ? treatment.completedAt
+        : treatment.date
+
+    return { ...treatment, updatedAt: fallbackUpdatedAt }
+
+  })
+
+  return { treatments: migratedTreatments, changed }
 
 }
 
@@ -2221,6 +2338,18 @@ function readPersistedActiveTreatment(): ActiveTreatment | null {
   creating one, allocates the next safe number and persists both
   updated values before returning - so by the time this resolves, the
   allocation is already durably saved, not just decided.
+
+  PHASE 4.6 - DYNAMIC NUMBERING: the new number is now computed purely
+  as highestAssignedPatientNumber + 1, never Math.max()'d against the
+  stored toothTargetNextPatientNumber counter. Now that a patient's
+  number can be edited directly (see editPatientRecordUnderLock()
+  below), that counter can drift arbitrarily far behind reality - eg.
+  editing a patient up to #74 while the counter is still sitting at
+  #10 - and trusting it as a floor would let a freshly-created patient
+  collide with (or fall behind) numbers that already exist. The live
+  patient list is the only value that can never be stale, so it's now
+  the only thing this reads. See this phase's own report for why the
+  stored counter is still written below rather than removed outright.
 */
 function allocatePatientUnderLock(cleanName: string): PatientAllocationResult {
 
@@ -2240,23 +2369,16 @@ function allocatePatientUnderLock(cleanName: string): PatientAllocationResult {
 
   }
 
-  const storedNextPatientNumber = readPersistedNextPatientNumber()
+  const safeNumber = computeNextPatientNumber(currentPatients)
 
-  const highestAssignedPatientNumber =
-    currentPatients.reduce(
-      (highest, patient) =>
-        patient.patientNumber > highest ? patient.patientNumber : highest,
-      0
-    )
-
-  const safeNumber =
-    Math.max(storedNextPatientNumber, highestAssignedPatientNumber + 1)
+  const createdAt = new Date().toISOString()
 
   const newPatient: Patient = {
     id: crypto.randomUUID(),
     patientNumber: safeNumber,
     name: cleanName,
-    updatedAt: new Date().toISOString(),
+    createdAt,
+    updatedAt: createdAt,
   }
 
   const updatedPatients = [...currentPatients, newPatient]
@@ -2267,6 +2389,17 @@ function allocatePatientUnderLock(cleanName: string): PatientAllocationResult {
     JSON.stringify(updatedPatients)
   )
 
+  /*
+    Kept as a best-effort, non-authoritative hint only - nothing reads
+    this to decide a number anymore (see this function's own comment
+    above), but it costs nothing to keep writing it, and removing the
+    key entirely would also mean touching cloudSyncEngine.ts's
+    per-account cache format (Phase 4), which already carries this
+    same value for a different, still-legitimate reason (restoring a
+    previously-seen account's own counter alongside the rest of its
+    local state) - not worth disturbing for a value that's otherwise
+    harmless to keep.
+  */
   localStorage.setItem(
     'toothTargetNextPatientNumber',
     JSON.stringify(updatedNextPatientNumber)
@@ -2409,6 +2542,148 @@ async function deletePatientFromRegistry(
   */
 
   return removePatientFromCurrentList(patientId)
+
+}
+
+/*
+  CROSS-TAB SAFE PATIENT EDIT (Phase 4.6)
+
+  Edits an existing patient's name and/or patientNumber in place -
+  same fresh-read-under-lock pattern as allocation/deletion above, so
+  an edit can never race a create/delete/another edit in a different
+  tab. id and createdAt are never touched by this (createdAt is
+  permanent from the moment a patient is created - see the Patient
+  type's own comment); updatedAt IS refreshed, the same "any
+  intentional content change bumps updatedAt" principle
+  patientNumberConflicts.ts's own conflict resolution already follows.
+
+  A collision with another patient's number is NOT blocked - the edit
+  is allowed to proceed, and the collision is recorded as a genuine
+  PatientNumberConflict via recordAndReconcilePatientNumberConflicts(),
+  reusing the exact same detect-and-record pattern a cloud merge
+  already uses for the same situation (two devices independently
+  assigning the same number), rather than inventing separate
+  edit-specific conflict handling. The dentist resolves it afterward
+  through the existing conflict-browser UI, same as any other
+  patient-number conflict.
+*/
+
+export type PatientEditResult =
+  | { edited: true; patients: Patient[]; conflicts: PatientNumberConflict[] }
+  | { edited: false; reason: string; patients: Patient[] }
+
+function editPatientRecordUnderLock(
+  patientId: string,
+  newName: string,
+  newPatientNumber: number
+): PatientEditResult {
+
+  const currentPatients = readPersistedPatients()
+
+  const existingPatient =
+    currentPatients.find(patient => patient.id === patientId)
+
+  if (!existingPatient) {
+
+    return {
+      edited: false,
+      reason:
+        'This patient no longer exists - it may have already been deleted.',
+      patients: currentPatients,
+    }
+
+  }
+
+  const cleanName = newName.trim()
+
+  if (cleanName === '') {
+
+    return {
+      edited: false,
+      reason: 'Patient name cannot be empty.',
+      patients: currentPatients,
+    }
+
+  }
+
+  if (!Number.isInteger(newPatientNumber) || newPatientNumber <= 0) {
+
+    return {
+      edited: false,
+      reason: 'Patient number must be a positive whole number.',
+      patients: currentPatients,
+    }
+
+  }
+
+  if (
+    existingPatient.name === cleanName &&
+    existingPatient.patientNumber === newPatientNumber
+  ) {
+
+    return {
+      edited: true,
+      patients: currentPatients,
+      conflicts: readPersistedPatientNumberConflicts(),
+    }
+
+  }
+
+  const updatedPatients =
+    currentPatients.map(patient =>
+      patient.id === patientId
+        ? {
+            ...patient,
+            name: cleanName,
+            patientNumber: newPatientNumber,
+            updatedAt: new Date().toISOString(),
+          }
+        : patient
+    )
+
+  localStorage.setItem(
+    'toothTargetPatients',
+    JSON.stringify(updatedPatients)
+  )
+
+  const detectedConflict =
+    detectPatientNumberConflict(updatedPatients, newPatientNumber)
+
+  const conflicts =
+    recordAndReconcilePatientNumberConflicts(
+      detectedConflict ? [detectedConflict] : [],
+      updatedPatients
+    )
+
+  return { edited: true, patients: updatedPatients, conflicts }
+
+}
+
+async function editPatientRecord(
+  patientId: string,
+  newName: string,
+  newPatientNumber: number
+): Promise<PatientEditResult> {
+
+  if (
+    typeof navigator !== 'undefined' &&
+    'locks' in navigator &&
+    navigator.locks
+  ) {
+
+    return navigator.locks.request(
+      PATIENT_ALLOCATION_LOCK_NAME,
+      () => editPatientRecordUnderLock(patientId, newName, newPatientNumber)
+    )
+
+  }
+
+  /*
+    No Web Locks API available - proceed unprotected, same fallback
+    allocatePatient() above uses.
+  */
+
+  return editPatientRecordUnderLock(patientId, newName, newPatientNumber)
 
 }
 
@@ -2733,6 +3008,25 @@ const [conflictResolutionError, setConflictResolutionError] =
   const [deletePatientBlockedReason, setDeletePatientBlockedReason] =
     useState<string | null>(null)
 
+  /*
+    EDIT PATIENT (Phase 4.6)
+  */
+
+  const [showEditPatient, setShowEditPatient] =
+    useState(false)
+
+  const [editPatientName, setEditPatientName] =
+    useState('')
+
+  const [editPatientNumberInput, setEditPatientNumberInput] =
+    useState('')
+
+  const [editPatientError, setEditPatientError] =
+    useState<string | null>(null)
+
+  const [editPatientBusy, setEditPatientBusy] =
+    useState(false)
+
   const [editingTemplateId, setEditingTemplateId] =
     useState<string | null>(null)
 
@@ -2772,6 +3066,19 @@ const [conflictResolutionError, setConflictResolutionError] =
 
   const [selectedHistoryTreatment, setSelectedHistoryTreatment] =
     useState<SavedTreatment | null>(null)
+
+  /*
+    DELETE / EDIT SAVED TREATMENT (Phase 4.6)
+  */
+
+  const [showDeleteTreatmentConfirm, setShowDeleteTreatmentConfirm] =
+    useState(false)
+
+  const [showEditTreatmentPhases, setShowEditTreatmentPhases] =
+    useState(false)
+
+  const [editPhaseMinutes, setEditPhaseMinutes] =
+    useState<string[]>([])
 
   const [customNoteText, setCustomNoteText] = useState('')
 
@@ -3377,7 +3684,6 @@ const [conflictResolutionError, setConflictResolutionError] =
       const migratedIdentity =
         migratePatientIdentity({
           rawPatients,
-          rawNextPatientNumber,
           savedTreatments: shapedSavedTreatments,
           incompleteTreatments: shapedIncompleteTreatments,
           activeTreatment: shapedActiveTreatment,
@@ -3423,7 +3729,10 @@ const [conflictResolutionError, setConflictResolutionError] =
             )
           : null
 
-      const finalSavedTreatments = savedTreatmentNameResult.treatments
+      const savedTreatmentTimestampResult =
+        migrateSavedTreatmentTimestamps(savedTreatmentNameResult.treatments)
+
+      const finalSavedTreatments = savedTreatmentTimestampResult.treatments
       const finalIncompleteTreatments = incompleteTreatmentNameResult.treatments
       const finalActiveTreatment =
         activeTreatmentNameResult?.treatment ?? migratedIdentity.activeTreatment
@@ -3479,7 +3788,8 @@ const [conflictResolutionError, setConflictResolutionError] =
       const patientNameMigrationChanged =
         savedTreatmentNameResult.changed ||
         incompleteTreatmentNameResult.changed ||
-        (activeTreatmentNameResult?.changed ?? false)
+        (activeTreatmentNameResult?.changed ?? false) ||
+        savedTreatmentTimestampResult.changed
 
       setSavedPatients(finalPatients)
       setSavedTreatments(finalSavedTreatments)
@@ -5201,6 +5511,9 @@ async function openPatient(
       completedAt:
         new Date().toISOString(),
 
+      updatedAt:
+        new Date().toISOString(),
+
     }
 
 
@@ -5888,6 +6201,71 @@ async function openPatient(
 
 
   /*
+    EDIT PATIENT (Phase 4.6)
+
+    Opens pre-filled with the patient's CURRENT name/number (called
+    from the Patient screen, which already has the resolved record in
+    scope) - editPatientRecord() itself re-reads the registry fresh
+    under the same cross-tab lock allocation/deletion use, so what
+    actually gets edited is never this tab's possibly-stale copy.
+  */
+
+  function requestEditPatient(patient: Patient) {
+    setEditPatientName(patient.name)
+    setEditPatientNumberInput(String(patient.patientNumber))
+    setEditPatientError(null)
+    setShowEditPatient(true)
+  }
+
+  function cancelEditPatient() {
+    setShowEditPatient(false)
+    setEditPatientError(null)
+  }
+
+  async function confirmEditPatient(patientId: string) {
+
+    const parsedNumber = Number(editPatientNumberInput)
+
+    setEditPatientBusy(true)
+
+    const result =
+      await editPatientRecord(patientId, editPatientName, parsedNumber)
+
+    setEditPatientBusy(false)
+
+    if (!result.edited) {
+      setEditPatientError(result.reason)
+      return
+    }
+
+    setSavedPatients(result.patients)
+
+    setPatientNumberConflicts(result.conflicts)
+
+    /*
+      selectedPatient (this screen's own "which patient" identifier)
+      is a NAME, not a UUID - if the name just changed, it has to be
+      updated too, or this screen would immediately fail to resolve
+      selectedPatientRecord against the now-renamed registry entry on
+      the very next render.
+    */
+    const updatedRecord =
+      result.patients.find(patient => patient.id === patientId)
+
+    if (updatedRecord) {
+      setSelectedPatient(updatedRecord.name)
+    }
+
+    requestCloudSync()
+
+    setShowEditPatient(false)
+
+    setEditPatientError(null)
+
+  }
+
+
+  /*
     DELETE PATIENT
   */
 
@@ -6113,9 +6491,11 @@ async function openPatient(
   /*
     TREATMENT HISTORY DETAIL
 
-    Read-only: this screen only ever displays data via
-    TreatmentSummaryCard, which renders no inputs, so there is
-    nothing here that could accidentally edit historical timing.
+    Phase 4.6: previously read-only (TreatmentSummaryCard renders no
+    inputs) - now also offers deleting this one treatment outright, or
+    editing its phase timings, without touching its patient or any
+    other treatment. Both close back to the Patient screen, same as
+    the read-only "back" flow already did.
   */
 
   function openTreatmentDetail(
@@ -6133,6 +6513,164 @@ async function openPatient(
     setSelectedHistoryTreatment(null)
 
     setScreen('patient')
+
+  }
+
+  /*
+    DELETE ONE SAVED TREATMENT (Phase 4.6)
+
+    Distinct from deleting a whole patient (which cascades to every
+    one of their treatments, Phase 4.5) - this removes exactly the one
+    treatment currently open here, tombstoning it the same way any
+    other treatment removal already does (orphan cleanup, patient-
+    deletion cascade), so the deletion propagates through sync instead
+    of reappearing from another device's older copy.
+  */
+
+  function requestDeleteTreatment() {
+    setShowDeleteTreatmentConfirm(true)
+  }
+
+  function cancelDeleteTreatment() {
+    setShowDeleteTreatmentConfirm(false)
+  }
+
+  function confirmDeleteTreatment() {
+
+    if (!selectedHistoryTreatment) {
+      return
+    }
+
+    const treatmentId = selectedHistoryTreatment.id
+
+    const currentSavedTreatments = readPersistedSavedTreatments()
+
+    const updatedTreatments =
+      currentSavedTreatments.filter(
+        treatment => treatment.id !== treatmentId
+      )
+
+    setSavedTreatments(updatedTreatments)
+
+    localStorage.setItem(
+      'toothTargetSavedTreatments',
+      JSON.stringify(updatedTreatments)
+    )
+
+    appendTombstone('treatment', treatmentId)
+
+    requestCloudSync()
+
+    setShowDeleteTreatmentConfirm(false)
+
+    closeTreatmentDetail()
+
+  }
+
+  /*
+    EDIT PHASE TIMINGS OF A SAVED TREATMENT (Phase 4.6)
+
+    Edits actualDuration on each of this treatment's phaseRecords - the
+    figures TreatmentSummaryCard/statistics.ts actually read for a
+    completed treatment (phaseTimes/actualTimes are only ever consulted
+    for an ACTIVE/incomplete treatment's live timer - see
+    ActiveTreatment's own fields - so they are deliberately left
+    untouched here rather than kept in sync with data nothing displays
+    for a completed one). Minutes, not seconds, to match this app's
+    existing "minimal typing" duration inputs elsewhere (eg. template
+    phase editing) - entered as whole minutes and converted to seconds
+    on save.
+  */
+
+  function requestEditTreatmentPhases() {
+
+    if (!selectedHistoryTreatment) {
+      return
+    }
+
+    setEditPhaseMinutes(
+      selectedHistoryTreatment.phaseRecords.map(
+        record => String(Math.round(record.actualDuration / 60))
+      )
+    )
+
+    setShowEditTreatmentPhases(true)
+
+  }
+
+  function cancelEditTreatmentPhases() {
+    setShowEditTreatmentPhases(false)
+  }
+
+  function updateEditPhaseMinutes(index: number, value: string) {
+
+    setEditPhaseMinutes(current =>
+      current.map((minutes, i) => (i === index ? value : minutes))
+    )
+
+  }
+
+  function confirmEditTreatmentPhases() {
+
+    if (!selectedHistoryTreatment) {
+      return
+    }
+
+    const treatmentId = selectedHistoryTreatment.id
+
+    const updatedPhaseRecords =
+      selectedHistoryTreatment.phaseRecords.map((record, index) => {
+
+        const parsedMinutes = Number(editPhaseMinutes[index])
+
+        const actualDuration =
+          Number.isFinite(parsedMinutes) && parsedMinutes >= 0
+            ? Math.round(parsedMinutes * 60)
+            : record.actualDuration
+
+        return { ...record, actualDuration }
+
+      })
+
+    const totalActualDuration =
+      updatedPhaseRecords.reduce(
+        (total, record) => total + record.actualDuration,
+        0
+      )
+
+    const totalOvertimeDuration =
+      Math.max(
+        0,
+        totalActualDuration - selectedHistoryTreatment.totalExpectedDuration
+      )
+
+    const updatedTreatment: SavedTreatment = {
+      ...selectedHistoryTreatment,
+      phaseRecords: updatedPhaseRecords,
+      totalActualDuration,
+      totalOvertimeDuration,
+      updatedAt: new Date().toISOString(),
+    }
+
+    const currentSavedTreatments = readPersistedSavedTreatments()
+
+    const updatedTreatments =
+      currentSavedTreatments.map(treatment =>
+        treatment.id === treatmentId ? updatedTreatment : treatment
+      )
+
+    setSavedTreatments(updatedTreatments)
+
+    localStorage.setItem(
+      'toothTargetSavedTreatments',
+      JSON.stringify(updatedTreatments)
+    )
+
+    setSelectedHistoryTreatment(updatedTreatment)
+
+    requestCloudSync()
+
+    setShowEditTreatmentPhases(false)
 
   }
 
@@ -7626,6 +8164,22 @@ const patientTreatments =
         </div>
 
 
+        {selectedPatientRecord && (
+
+          <div className="delete-patient-section">
+
+            <button
+              type="button"
+              onClick={() => requestEditPatient(selectedPatientRecord)}
+            >
+              Edit Patient
+            </button>
+
+          </div>
+
+        )}
+
+
         <div className="delete-patient-section">
 
           <button
@@ -7637,6 +8191,93 @@ const patientTreatments =
           </button>
 
         </div>
+
+
+        {showEditPatient && selectedPatientRecord && (
+
+          <div className="modal-overlay">
+
+            <div className="modal-card">
+
+              <h2>
+                Edit Patient
+              </h2>
+
+              <div className="add-procedure-form">
+
+                <input
+                  type="text"
+                  value={editPatientName}
+                  onChange={
+                    event => setEditPatientName(event.target.value)
+                  }
+                  placeholder="Patient name"
+                  autoFocus
+                />
+
+              </div>
+
+              <div
+                className="add-phase-duration-row"
+              >
+
+                <label>
+                  Patient number
+                </label>
+
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  step={1}
+                  value={editPatientNumberInput}
+                  onChange={
+                    event => setEditPatientNumberInput(event.target.value)
+                  }
+                />
+
+              </div>
+
+              {editPatientError && (
+                <p className="conflict-resolution-error">
+                  {editPatientError}
+                </p>
+              )}
+
+              <p className="template-meta">
+                Changing this patient's number to one another patient
+                already has is allowed, but will be flagged as a
+                patient number conflict for you to resolve afterward
+                (Settings).
+              </p>
+
+              <div className="modal-actions">
+
+                <button
+                  type="button"
+                  onClick={cancelEditPatient}
+                  disabled={editPatientBusy}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={
+                    () => confirmEditPatient(selectedPatientRecord.id)
+                  }
+                  disabled={editPatientBusy}
+                >
+                  {editPatientBusy ? 'Saving…' : 'Save'}
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        )}
 
 
         {showDeleteConfirm && (
@@ -9652,7 +10293,7 @@ const patientTreatments =
 
   /*
     =========================================
-    TREATMENT DETAIL (read-only history)
+    TREATMENT DETAIL (history, plus edit/delete - Phase 4.6)
     =========================================
   */
 
@@ -9723,6 +10364,130 @@ const patientTreatments =
             selectedHistoryTreatment.tags
           }
         />
+
+        <div className="delete-patient-section">
+
+          <button
+            type="button"
+            onClick={requestEditTreatmentPhases}
+          >
+            Edit Phase Timings
+          </button>
+
+          <button
+            type="button"
+            className="delete-patient-button"
+            onClick={requestDeleteTreatment}
+          >
+            Delete Treatment
+          </button>
+
+        </div>
+
+
+        {showEditTreatmentPhases && (
+
+          <div className="modal-overlay">
+
+            <div className="modal-card">
+
+              <h2>
+                Edit Phase Timings
+              </h2>
+
+              <p className="template-meta">
+                Actual minutes spent on each phase. Totals recalculate
+                automatically when you save.
+              </p>
+
+              {selectedHistoryTreatment.phaseRecords.map((record, index) => (
+
+                <div className="template-phase-row" key={record.id}>
+
+                  <span>
+                    {record.name}
+                  </span>
+
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    value={editPhaseMinutes[index] ?? '0'}
+                    onChange={
+                      event =>
+                        updateEditPhaseMinutes(index, event.target.value)
+                    }
+                  />
+
+                </div>
+
+              ))}
+
+              <div className="modal-actions">
+
+                <button
+                  type="button"
+                  onClick={cancelEditTreatmentPhases}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={confirmEditTreatmentPhases}
+                >
+                  Save
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        )}
+
+
+        {showDeleteTreatmentConfirm && (
+
+          <div className="modal-overlay">
+
+            <div className="modal-card">
+
+              <h2>
+                Delete this treatment?
+              </h2>
+
+              <p>
+                This removes only this one treatment record. The
+                patient and their other treatments are not affected.
+                This action cannot be undone.
+              </p>
+
+              <div className="modal-actions">
+
+                <button
+                  type="button"
+                  onClick={cancelDeleteTreatment}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  className="button-danger"
+                  onClick={confirmDeleteTreatment}
+                >
+                  Delete
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        )}
 
       </div>
 

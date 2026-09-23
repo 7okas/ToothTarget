@@ -69,6 +69,14 @@ export type CloudSyncDocument = {
   templates. This only checks the field is a real, non-empty
   timestamp string - never compares it to anything; that comparison
   is the merge engine's job, not this validator's.
+
+  createdAt (Phase 4.6) is required the same way, for the same reason
+  every other required field here is: a document this module accepts
+  must already be shaped exactly like App.tsx's own Patient type, not
+  a subset of it - it is never compared or given special merge
+  treatment (a same-id disagreement is still resolved purely by
+  updatedAt, per cloudMerge.ts's pickWinningByUpdatedAt(); whichever
+  record wins simply carries its own createdAt along for free).
 */
 
 function isValidSyncPatient(value: unknown): value is Patient {
@@ -83,6 +91,8 @@ function isValidSyncPatient(value: unknown): value is Patient {
     (value as Patient).patientNumber > 0 &&
     typeof (value as Patient).name === 'string' &&
     (value as Patient).name.trim() !== '' &&
+    typeof (value as Patient).createdAt === 'string' &&
+    (value as Patient).createdAt.trim() !== '' &&
     typeof (value as Patient).updatedAt === 'string' &&
     (value as Patient).updatedAt.trim() !== ''
   )
@@ -99,6 +109,15 @@ function isValidSyncPatient(value: unknown): value is Patient {
   be a real UUID string, so this validator only accepts that form.
   This is exactly the kind of divergence the two schemas are allowed
   to have, per this file's own top comment.
+
+  updatedAt is required here (Phase 4.6, added to SavedTreatment once
+  editing a completed treatment's phase data became possible - see
+  App.tsx's confirmEditTreatmentPhases()): a completed treatment is no
+  longer purely create-only, and cloudMerge.ts's same-id treatment
+  merge needs a real timestamp to prefer an edit over a stale copy,
+  exactly like it already does for patients/templates. This only
+  checks the field is a real, non-empty timestamp string - never
+  compares it to anything; that comparison is the merge engine's job.
 */
 
 function isValidSyncSavedTreatment(value: unknown): value is SavedTreatment {
@@ -115,7 +134,9 @@ function isValidSyncSavedTreatment(value: unknown): value is SavedTreatment {
     typeof candidate.patientId === 'string' &&
     typeof candidate.patientName === 'string' &&
     typeof candidate.toothId === 'string' &&
-    Array.isArray(candidate.phases)
+    Array.isArray(candidate.phases) &&
+    typeof candidate.updatedAt === 'string' &&
+    (candidate.updatedAt as string).trim() !== ''
   )
 
 }

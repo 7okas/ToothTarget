@@ -29,6 +29,7 @@ function makePatient(overrides: Partial<Patient> = {}): Patient {
     id: 'patient-1',
     patientNumber: 1,
     name: 'Jane Doe',
+    createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
@@ -74,6 +75,7 @@ function makeSavedTreatment(
     currentPhaseIndex: 0,
     startedAt: '2026-01-01T00:00:00.000Z',
     completedAt: '2026-01-01T00:08:20.000Z',
+    updatedAt: '2026-01-01T00:08:20.000Z',
     ...overrides,
   }
 }
@@ -427,6 +429,36 @@ describe('mergeCloudSyncDocuments - saved treatments', () => {
 
     expect(result.document.savedTreatments).toHaveLength(1)
     expect(result.document.savedTreatments[0]).toEqual(treatment)
+
+  })
+
+  it('Phase 4.6: a same-id disagreement prefers the newer updatedAt (an edited treatment), not an arbitrary content pick', () => {
+
+    const staleTreatment = makeSavedTreatment({
+      id: 't1',
+      totalActualDuration: 500,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    const editedTreatment = makeSavedTreatment({
+      id: 't1',
+      totalActualDuration: 700,
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    })
+
+    // Symmetric regardless of which side is "local" vs "remote".
+    const resultA = mergeCloudSyncDocuments(
+      makeDocument({ savedTreatments: [staleTreatment] }),
+      makeDocument({ savedTreatments: [editedTreatment] })
+    )
+
+    const resultB = mergeCloudSyncDocuments(
+      makeDocument({ savedTreatments: [editedTreatment] }),
+      makeDocument({ savedTreatments: [staleTreatment] })
+    )
+
+    expect(resultA.document.savedTreatments).toEqual([editedTreatment])
+    expect(resultB.document.savedTreatments).toEqual([editedTreatment])
 
   })
 

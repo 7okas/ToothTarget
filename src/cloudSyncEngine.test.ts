@@ -99,6 +99,7 @@ function makePatient(overrides: Partial<Patient> = {}): Patient {
     id: 'patient-1',
     patientNumber: 1,
     name: 'Jane Doe',
+    createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
@@ -144,6 +145,7 @@ function makeSavedTreatment(
     currentPhaseIndex: 0,
     startedAt: '2026-01-01T00:00:00.000Z',
     completedAt: '2026-01-01T00:08:20.000Z',
+    updatedAt: '2026-01-01T00:08:20.000Z',
     ...overrides,
   }
 }

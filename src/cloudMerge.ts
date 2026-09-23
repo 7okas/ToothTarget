@@ -32,40 +32,33 @@ import type { CloudSyncDocument } from './cloudSync'
   DECISIONS ON "SHOULD NEVER HAPPEN" CASES (documented, not invented)
   ============================================================
 
-  The current ToothTarget data model treats Patient, SavedTreatment
-  and Procedure as create-only/immutable after creation:
-    - Patient: no rename/renumber UI exists anywhere in App.tsx: a
-      patientNumber is permanent once assigned and name is set once
-      at creation (see allocatePatientUnderLock()/allocatePatient()).
-    - SavedTreatment: appended once on completion
-      (setSavedTreatments([...savedTreatments, completed]) in
-      App.tsx) and otherwise only ever migrated (shape-only) or
-      removed outright on patient deletion - there is no "edit a
-      saved treatment" path.
-    - Procedure: created once via addProcedure() (isCustom: true,
-      crypto.randomUUID() id) and never edited afterward - there is
-      no procedure editor.
-  None of these three types carry an updatedAt field, so there is no
+  Only Procedure is still treated as create-only/immutable after
+  creation: created once via addProcedure() (isCustom: true,
+  crypto.randomUUID() id) and never edited afterward - there is no
+  procedure editor, and it carries no updatedAt field, so there is no
   legitimate timestamp to compare even if two copies of the same id
   ever did disagree.
 
   Because of that, this merge engine does NOT invent a "latest wins"
-  rule for patients/treatments/procedures - there is no honest notion
-  of "latest" for a type that's never supposed to change. If the same
-  id nonetheless carries different data on the two sides (which the
-  current app should never itself produce - this would mean a manually
-  edited cloud file, corruption, or a future bug), resolveTie() below
-  is used: a deterministic, content-based tie-break that is symmetric
-  regardless of which side is passed as "local" vs "remote" (required
-  for merge(local, remote) === merge(remote, local)), and does not
+  rule for procedures - there is no honest notion of "latest" for a
+  type that's never supposed to change. If the same id nonetheless
+  carries different data on the two sides (which the current app
+  should never itself produce - this would mean a manually edited
+  cloud file, corruption, or a future bug), resolveTie() below is used:
+  a deterministic, content-based tie-break that is symmetric regardless
+  of which side is passed as "local" vs "remote" (required for
+  merge(local, remote) === merge(remote, local)), and does not
   fabricate a new identity or silently prefer either side by
-  convention. It has no opinion about which value is "right" - it
-  only guarantees one single, reproducible answer instead of a
-  fabricated timestamp, a random pick, or an argument-order-dependent
-  pick. ProcedureTemplate and Patient are the two exceptions: both
-  carry a real updatedAt (Phase 2 and Phase 8 respectively), so
-  genuine last-write-wins applies to them, with resolveTie() only as
-  the equal-updatedAt fallback (see pickWinningByUpdatedAt() below).
+  convention. It has no opinion about which value is "right" - it only
+  guarantees one single, reproducible answer instead of a fabricated
+  timestamp, a random pick, or an argument-order-dependent pick.
+
+  Patient (Phase 8), ProcedureTemplate (Phase 2), and SavedTreatment
+  (Phase 4.6, once editing a completed treatment's phase data became
+  possible - see App.tsx's confirmEditTreatmentPhases()) each carry a
+  real updatedAt, so genuine last-write-wins applies to them via
+  pickWinningByUpdatedAt() below, with resolveTie() only as the
+  equal-updatedAt fallback.
 
   patientNumberConflicts is computed from the FINAL surviving patient
   set (after tombstone suppression), not from the raw id-union: a
@@ -476,18 +469,30 @@ export function mergeCloudSyncDocuments(
   const patientNumberConflicts = findPatientNumberConflicts(survivingPatients)
 
   /*
-    SAVED TREATMENTS - union by id, then suppressed either if they
-    belong to a tombstoned patient (section 8) or if the treatment
-    itself was directly tombstoned (eg. an orphaned record with no
-    matching patient, cleaned up by App.tsx's own load-time migration -
+    SAVED TREATMENTS - union by id with latest-updatedAt-wins (Phase
+    4.6), then suppressed either if they belong to a tombstoned patient
+    (section 8) or if the treatment itself was directly tombstoned (eg.
+    an orphaned record with no matching patient, cleaned up by App.tsx's
+    own load-time migration, or a single treatment deleted directly -
     see DeletionTombstone['entityType'] for why 'treatment' exists
     alongside 'patient'/'procedureTemplate').
+
+    Phase 4.6 note: SavedTreatment gained an updatedAt field once
+    editing a completed treatment's phase data became possible - before
+    that, this module's own header comment correctly called this type
+    "create-only/immutable" and used the plain content-only resolveTie()
+    below (same as CUSTOM PROCEDURES still does, since Procedure has no
+    edit path and no updatedAt). Now that an edit is a real, intentional
+    mutation, it needs the identical "newer updatedAt wins" treatment
+    Patient/ProcedureTemplate already get, for the identical reason: a
+    same-id disagreement must prefer the edit over a stale pre-edit
+    copy, not an arbitrary content-based pick.
   */
 
   const unionedSavedTreatments = unionById(
     localDocument.savedTreatments,
     remoteDocument.savedTreatments,
-    resolveTie
+    pickWinningByUpdatedAt
   )
 
   const survivingSavedTreatments = unionedSavedTreatments.filter(

@@ -24,15 +24,18 @@ import type { PatientNumberConflict } from './cloudMerge'
   time under verbatimModuleSyntax), so this module has zero runtime
   dependency on either of them and is safe to import directly in
   tests. Consequently, readPersistedPatients()/
-  readPersistedNextPatientNumber()/PATIENT_ALLOCATION_LOCK_NAME below
-  are each small, self-contained re-implementations of the equivalent
-  helpers already living in App.tsx (reading the exact same
-  'toothTargetPatients'/'toothTargetNextPatientNumber' keys, and using
+  PATIENT_ALLOCATION_LOCK_NAME below are each small, self-contained
+  re-implementations of the equivalent helpers already living in
+  App.tsx (reading the exact same 'toothTargetPatients' key, and using
   the exact same lock name string) - mirroring the same "duplicate the
   tiny localStorage read, never the business logic" pattern
   cloudBackup.ts already established for the same reason. If either
   key name or the lock name ever changes in App.tsx, it must change
-  here too.
+  here too. NEXT_PATIENT_NUMBER_KEY is still written (see
+  resolvePatientNumberConflictUnderLock() below) as a non-authoritative
+  cache, per Phase 4.6's own reasoning (App.tsx's
+  allocatePatientUnderLock()), but is no longer read anywhere in this
+  file.
 
   Only { patientNumber, patientIds } is ever persisted - never patient
   names, treatment data, or anything else - because the current
@@ -53,6 +56,67 @@ export const PATIENT_NUMBER_CONFLICTS_KEY = 'toothTargetPatientNumberConflicts'
   lock, not a separate one.
 */
 export const PATIENT_ALLOCATION_LOCK_NAME = 'toothtarget-patient-allocation'
+
+/*
+  DYNAMIC NEXT-PATIENT-NUMBER (Phase 4.6)
+
+  Shared by App.tsx's allocatePatientUnderLock() (brand-new patient
+  creation) and this file's own resolvePatientNumberConflictUnderLock()
+  (renumbering a conflict's losing patient(s)) - the one place either
+  of those now computes "what's the next safe patientNumber", so the
+  two can never drift apart in how they answer that question. Purely a
+  function of the CURRENT patient list - never
+  toothTargetNextPatientNumber, which is no longer trusted as a floor
+  for this decision (see this file's own header comment and App.tsx's
+  allocatePatientUnderLock() for the full reasoning, including the
+  deliberate trade-off that a deleted patient's number can now be
+  handed out again, since nothing here remembers numbers that used to
+  exist but don't anymore).
+*/
+
+export function computeNextPatientNumber(
+  patients: { patientNumber: number }[]
+): number {
+
+  const highestAssignedPatientNumber =
+    patients.reduce(
+      (highest, patient) =>
+        patient.patientNumber > highest ? patient.patientNumber : highest,
+      0
+    )
+
+  return highestAssignedPatientNumber + 1
+
+}
+
+/*
+  EDIT-TIME CONFLICT DETECTION (Phase 4.6)
+
+  Used by App.tsx's editPatientRecordUnderLock() right after applying a
+  patient-number edit, to check whether that edit just collided with
+  another patient's number. Deliberately NOT exported as a blocker -
+  the edit itself is never prevented by this; the caller passes
+  whatever this returns straight into recordAndReconcilePatientNumberConflicts()
+  below, the exact same detect-and-record pattern a cloud merge already
+  uses for the same underlying situation (two independently-made
+  changes landing on the same number).
+*/
+
+export function detectPatientNumberConflict(
+  patients: { id: string; patientNumber: number }[],
+  patientNumber: number
+): PatientNumberConflict | null {
+
+  const collidingIds =
+    patients
+      .filter(patient => patient.patientNumber === patientNumber)
+      .map(patient => patient.id)
+
+  return collidingIds.length > 1
+    ? { patientNumber, patientIds: collidingIds.sort() }
+    : null
+
+}
 
 function isValidPatient(value: unknown): value is Patient {
 
@@ -83,30 +147,6 @@ function readPersistedPatients(): Patient[] {
   } catch {
 
     return []
-
-  }
-
-}
-
-function readPersistedNextPatientNumber(): number {
-
-  try {
-
-    const raw = localStorage.getItem(NEXT_PATIENT_NUMBER_KEY)
-
-    if (!raw) {
-      return 1
-    }
-
-    const parsed = JSON.parse(raw)
-
-    return typeof parsed === 'number' && Number.isInteger(parsed) && parsed > 0
-      ? parsed
-      : 1
-
-  } catch {
-
-    return 1
 
   }
 
@@ -388,17 +428,20 @@ export function resolvePatientNumberConflictUnderLock(
 
   }
 
-  const storedNextPatientNumber = readPersistedNextPatientNumber()
+  /*
+    PHASE 4.6 - DYNAMIC NUMBERING: the renumbering pool now starts
+    purely from one past the highest patientNumber any current patient
+    already has (computeNextPatientNumber(), above) -
+    readPersistedNextPatientNumber() is no longer consulted as a
+    floor. Now that a patient's number can be edited directly (App.tsx's
+    editPatientRecordUnderLock()), that stored counter can drift
+    arbitrarily far behind reality, and trusting it here could hand a
+    losing patient a number that collides with one a dentist manually
+    assigned. See App.tsx's own allocatePatientUnderLock() comment for
+    the identical reasoning.
+  */
 
-  const highestAssignedPatientNumber =
-    currentPatients.reduce(
-      (highest, patient) =>
-        patient.patientNumber > highest ? patient.patientNumber : highest,
-      0
-    )
-
-  let nextAvailableNumber =
-    Math.max(storedNextPatientNumber, highestAssignedPatientNumber + 1)
+  let nextAvailableNumber = computeNextPatientNumber(currentPatients)
 
   const renumberedIds = new Set(
     patientsToRenumber.map(patient => patient.id)

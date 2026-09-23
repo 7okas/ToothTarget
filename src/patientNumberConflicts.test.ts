@@ -10,6 +10,8 @@ import {
   reconcilePatientNumberConflicts,
   reconcileAndPersistPatientNumberConflicts,
   resolvePatientNumberConflictUnderLock,
+  computeNextPatientNumber,
+  detectPatientNumberConflict,
 } from './patientNumberConflicts'
 
 /*
@@ -60,6 +62,7 @@ function makePatient(overrides: Partial<Patient> = {}): Patient {
     id: 'patient-1',
     patientNumber: 1,
     name: 'Jane Doe',
+    createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
@@ -82,6 +85,111 @@ function seedConflicts(conflicts: PatientNumberConflict[]): void {
     JSON.stringify(conflicts)
   )
 }
+
+describe('computeNextPatientNumber (Phase 4.6 - dynamic numbering)', () => {
+
+  it('returns 1 for an empty patient list', () => {
+    expect(computeNextPatientNumber([])).toBe(1)
+  })
+
+  it('returns one past the highest patientNumber present', () => {
+
+    expect(
+      computeNextPatientNumber([
+        { patientNumber: 1 },
+        { patientNumber: 5 },
+        { patientNumber: 3 },
+      ])
+    ).toBe(6)
+
+  })
+
+  it('is unaffected by input order', () => {
+
+    expect(
+      computeNextPatientNumber([
+        { patientNumber: 42 },
+        { patientNumber: 1 },
+        { patientNumber: 17 },
+      ])
+    ).toBe(43)
+
+  })
+
+  it('handles duplicate numbers (eg. mid-conflict) without double-counting', () => {
+
+    expect(
+      computeNextPatientNumber([
+        { patientNumber: 12 },
+        { patientNumber: 12 },
+      ])
+    ).toBe(13)
+
+  })
+
+  it('reflects a manually-edited-upward number immediately (the Phase 4.6 bug this fixes)', () => {
+
+    // A patient was edited up to #74 - the very next allocation must
+    // account for that immediately, with no separate counter to keep
+    // in sync.
+    expect(
+      computeNextPatientNumber([
+        { patientNumber: 1 },
+        { patientNumber: 74 },
+      ])
+    ).toBe(75)
+
+  })
+
+})
+
+describe('detectPatientNumberConflict (Phase 4.6 - edit-time conflict detection)', () => {
+
+  it('returns null when no other patient holds the number', () => {
+
+    expect(
+      detectPatientNumberConflict(
+        [
+          { id: 'a', patientNumber: 5 },
+          { id: 'b', patientNumber: 6 },
+        ],
+        5
+      )
+    ).toBeNull()
+
+  })
+
+  it('returns a conflict listing both ids when two patients share the number', () => {
+
+    expect(
+      detectPatientNumberConflict(
+        [
+          { id: 'a', patientNumber: 5 },
+          { id: 'b', patientNumber: 5 },
+          { id: 'c', patientNumber: 9 },
+        ],
+        5
+      )
+    ).toEqual({ patientNumber: 5, patientIds: ['a', 'b'] })
+
+  })
+
+  it('includes every id sharing the number, sorted, even with 3+ collisions', () => {
+
+    expect(
+      detectPatientNumberConflict(
+        [
+          { id: 'c', patientNumber: 5 },
+          { id: 'a', patientNumber: 5 },
+          { id: 'b', patientNumber: 5 },
+        ],
+        5
+      )
+    ).toEqual({ patientNumber: 5, patientIds: ['a', 'b', 'c'] })
+
+  })
+
+})
 
 describe('patientNumberConflicts - persistence', () => {
 
@@ -304,6 +412,7 @@ describe('patientNumberConflicts - resolution', () => {
       id: 'a',
       patientNumber: 12,
       name: 'Ahmed Ali',
+      createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z', // completely unchanged - only the renumbered patient gets a fresh one
     })
 
@@ -328,10 +437,22 @@ describe('patientNumberConflicts - resolution', () => {
 
   })
 
-  it('never reuses a deleted/skipped number: uses the persisted counter, not just max+1', () => {
+  it('Phase 4.6: renumbering ignores a stale HIGHER counter - uses highest-currently-assigned + 1', () => {
 
-    // Registry only shows #1 and #12/#12, but the persisted counter
-    // already advanced past a since-deleted #20 patient.
+    /*
+      Registry only shows #1 and #12/#12, and the persisted counter
+      claims a since-deleted (or simply stale) #20 patient once
+      existed. Before Phase 4.6, that counter would have been trusted
+      as a floor, reserving #21+. Now that a patient's own number can
+      be edited directly (making the counter driftable in either
+      direction - see App.tsx's editPatientRecordUnderLock()), this
+      module no longer trusts it for either allocation OR renumbering:
+      only the CURRENT registry's own highest number is ever
+      authoritative. This does mean a number that belonged to a
+      deleted patient can now be handed out again - a deliberate,
+      reported trade-off of this phase, not an oversight.
+    */
+
     const patients = [
       makePatient({ id: 'a', patientNumber: 12 }),
       makePatient({ id: 'b', patientNumber: 12 }),
@@ -349,11 +470,11 @@ describe('patientNumberConflicts - resolution', () => {
     const renumberedPatient =
       result.patients.find(patient => patient.id === 'b')
 
-    expect(renumberedPatient?.patientNumber).toBe(21)
+    expect(renumberedPatient?.patientNumber).toBe(13)
 
   })
 
-  it('toothTargetNextPatientNumber never decreases and reflects the higher of counter/highest+1', () => {
+  it('Phase 4.6: toothTargetNextPatientNumber is written as a plain mirror of highest+1, no longer monotonic', () => {
 
     const patients = [
       makePatient({ id: 'a', patientNumber: 12 }),
@@ -371,11 +492,10 @@ describe('patientNumberConflicts - resolution', () => {
 
     // highest assigned (12) + 1 = 13, one number handed out -> 14
     expect(persistedCounter).toBe(14)
-    expect(persistedCounter).toBeGreaterThan(3)
 
   })
 
-  it('existing higher counter is preserved over highest+1', () => {
+  it('Phase 4.6: an existing HIGHER counter no longer protects a renumbered patient\'s new number', () => {
 
     const patients = [
       makePatient({ id: 'a', patientNumber: 12 }),
@@ -394,11 +514,12 @@ describe('patientNumberConflicts - resolution', () => {
     const renumberedPatient =
       result.patients.find(patient => patient.id === 'b')
 
-    expect(renumberedPatient?.patientNumber).toBe(100)
+    // highest currently-assigned (12) + 1 = 13, not the stale 100.
+    expect(renumberedPatient?.patientNumber).toBe(13)
 
     expect(
       JSON.parse(localStorage.getItem('toothTargetNextPatientNumber')!)
-    ).toBe(101)
+    ).toBe(14)
 
   })
 
