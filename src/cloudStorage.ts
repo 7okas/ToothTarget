@@ -1,5 +1,6 @@
 import { getAccessToken } from './auth'
 import { validateCloudSyncDocument, type CloudSyncDocument } from './cloudSync'
+import { migrateCloudSyncDocumentShape } from './cloudSyncSchemaMigration'
 
 /*
   CLOUD STORAGE (Microsoft Graph OneDrive App Folder)
@@ -370,7 +371,24 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
 
   }
 
-  const validation = validateCloudSyncDocument(parsedContent)
+  /*
+    SCHEMA MIGRATION (Phase 4.6 - cloud sync hardening)
+
+    A document downloaded from OneDrive may have been written by an
+    older version of this app, before a currently-required field
+    existed (eg. Patient.createdAt, SavedTreatment.updatedAt) - that's
+    an outdated document, not a corrupt one. migrateCloudSyncDocumentShape()
+    backfills exactly those known, safely-derivable fields (see its own
+    header comment for the full reasoning and the safety rules every
+    step follows) BEFORE the strict validator below ever sees it, so a
+    merely-outdated document is upgraded in memory and validated like
+    any current one - genuine corruption (wrong types, fields with no
+    honest fallback) still reaches validateCloudSyncDocument() untouched
+    and is still rejected exactly as before.
+  */
+  const migratedContent = migrateCloudSyncDocumentShape(parsedContent)
+
+  const validation = validateCloudSyncDocument(migratedContent)
 
   if (!validation.valid) {
     return { status: 'invalid-document', detail: validation.error }
