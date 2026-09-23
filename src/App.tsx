@@ -30,6 +30,7 @@ import {
   detectPatientNumberConflict,
 } from './patientNumberConflicts'
 import { planPatientDeletionCascade } from './patientDeletionCascade'
+import { applyPatientRenameToSavedTreatments } from './patientRenameCascade'
 import { requestCloudSync, requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
@@ -2569,7 +2570,20 @@ async function deletePatientFromRegistry(
 */
 
 export type PatientEditResult =
-  | { edited: true; patients: Patient[]; conflicts: PatientNumberConflict[] }
+  | {
+      edited: true
+      patients: Patient[]
+      conflicts: PatientNumberConflict[]
+      /*
+        Only present when the name actually changed - see the
+        renamedSavedTreatments comment inside
+        editPatientRecordUnderLock() below. Absent (rather than an
+        empty array) for a number-only edit or a genuine no-op, so the
+        caller can tell "nothing to apply" apart from "renamed zero
+        treatments because this patient happens to have none".
+      */
+      renamedSavedTreatments?: SavedTreatment[]
+    }
   | { edited: false; reason: string; patients: Patient[] }
 
 function editPatientRecordUnderLock(
@@ -2629,6 +2643,8 @@ function editPatientRecordUnderLock(
 
   }
 
+  const nowIso = new Date().toISOString()
+
   const updatedPatients =
     currentPatients.map(patient =>
       patient.id === patientId
@@ -2636,7 +2652,7 @@ function editPatientRecordUnderLock(
             ...patient,
             name: cleanName,
             patientNumber: newPatientNumber,
-            updatedAt: new Date().toISOString(),
+            updatedAt: nowIso,
           }
         : patient
     )
@@ -2655,7 +2671,45 @@ function editPatientRecordUnderLock(
       updatedPatients
     )
 
-  return { edited: true, patients: updatedPatients, conflicts }
+  /*
+    RENAME CASCADE (Phase 4.6, Part E)
+
+    A patient's saved treatments each carry a denormalized snapshot of
+    the patient's name (patientName), taken at treatment-save time
+    rather than looked up live - so a name edit here has to walk this
+    patient's own treatments and update that snapshot too, or history
+    would keep showing the old name. Only runs when the NAME actually
+    changed (a number-only edit leaves every treatment's patientName
+    and updatedAt untouched) - see patientRenameCascade.ts's own
+    header comment for why updatedAt is bumped on every treatment this
+    touches.
+  */
+
+  const renamedSavedTreatments =
+    existingPatient.name === cleanName
+      ? undefined
+      : applyPatientRenameToSavedTreatments(
+          readPersistedSavedTreatments(),
+          patientId,
+          cleanName,
+          nowIso
+        )
+
+  if (renamedSavedTreatments) {
+
+    localStorage.setItem(
+      'toothTargetSavedTreatments',
+      JSON.stringify(renamedSavedTreatments)
+    )
+
+  }
+
+  return {
+    edited: true,
+    patients: updatedPatients,
+    conflicts,
+    renamedSavedTreatments,
+  }
 
 }
 
@@ -6254,6 +6308,18 @@ async function openPatient(
 
     if (updatedRecord) {
       setSelectedPatient(updatedRecord.name)
+    }
+
+    /*
+      Rename cascade (Phase 4.6, Part E) - editPatientRecordUnderLock()
+      already wrote the renamed treatments to localStorage when the
+      name changed; this just mirrors that same array into React state
+      so the History screen reflects it immediately, without a reload.
+      Committed to localStorage above, synchronously, before
+      requestCloudSync() below - no separate sync call needed.
+    */
+    if (result.renamedSavedTreatments) {
+      setSavedTreatments(result.renamedSavedTreatments)
     }
 
     requestCloudSync()
