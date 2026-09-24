@@ -24,6 +24,7 @@ import { getAccessToken } from './auth'
 import {
   readCloudSyncDocument,
   writeCloudSyncDocument,
+  __setAppFolderProvisionedForTests,
 } from './cloudStorage'
 import { readCloudCorruptionDiagnostics } from './cloudCorruptionDiagnostics'
 
@@ -104,6 +105,14 @@ beforeEach(() => {
   mockedGetAccessToken.mockResolvedValue('test-access-token')
   vi.stubGlobal('fetch', vi.fn())
   globalThis.localStorage = new MemoryStorage()
+  /*
+    Every test below exercises read/write behavior assuming the App
+    Folder already exists (matching every test's existing mocked fetch
+    sequence, written before app-folder provisioning existed) - only
+    the dedicated 'app folder provisioning' tests further down opt out
+    of this by setting it back to false first.
+  */
+  __setAppFolderProvisionedForTests(true)
 })
 
 afterEach(() => {
@@ -610,6 +619,86 @@ describe('writeCloudSyncDocument', () => {
 
     expect(result.status).toBe('graph-error')
     expect(result.status).not.toBe('network-unreachable')
+
+  })
+
+})
+
+describe('app folder provisioning', () => {
+
+  /*
+    Only these tests opt back out of the beforeEach's default
+    "already provisioned" state, to exercise the provisioning call
+    itself (see cloudStorage.ts's ensureAppFolderProvisioned()).
+  */
+  beforeEach(() => {
+    __setAppFolderProvisionedForTests(false)
+  })
+
+  it('makes one extra plain GET on the App Folder itself before the first compound-path read, and proceeds normally', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, {})) // provisioning GET
+      .mockResolvedValueOnce(textResponse(404, 'Not Found')) // metadata GET
+
+    const result = await readCloudSyncDocument()
+
+    expect(result).toEqual({ status: 'not-found' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://graph.microsoft.com/v1.0/me/drive/special/approot'
+    )
+
+  })
+
+  it('only provisions once - a second sync attempt does not repeat the plain GET', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, {})) // provisioning GET
+      .mockResolvedValueOnce(textResponse(404, 'Not Found')) // 1st metadata GET
+      .mockResolvedValueOnce(textResponse(404, 'Not Found')) // 2nd metadata GET
+
+    await readCloudSyncDocument()
+    await readCloudSyncDocument()
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+
+  })
+
+  it('reports a graph-error from the provisioning GET itself as graph-error, before ever attempting the compound-path read', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock.mockResolvedValueOnce(textResponse(400, 'Bad Request'))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('graph-error')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+  })
+
+  it('also provisions before the first compound-path write', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, {})) // provisioning GET
+      .mockResolvedValueOnce(
+        jsonResponse(200, { uploadUrl: 'https://upload.example/session' })
+      )
+      .mockResolvedValueOnce(jsonResponse(201, { eTag: '"new-etag"' }))
+
+    const result = await writeCloudSyncDocument(makeDocument(), null)
+
+    expect(result).toEqual({ status: 'written', eTag: '"new-etag"' })
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://graph.microsoft.com/v1.0/me/drive/special/approot'
+    )
 
   })
 

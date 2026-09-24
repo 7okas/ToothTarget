@@ -352,6 +352,63 @@ function describeNetworkFailure(error: unknown): string {
 }
 
 /*
+  APP FOLDER PROVISIONING
+
+  Microsoft's own docs (learn.microsoft.com/graph/onedrive-sharepoint-
+  appfolder) document exactly one call as guaranteed to create the App
+  Folder the first time it's used: a plain GET on GRAPH_APPROOT itself,
+  with no child path appended. Every read/write below instead addresses
+  a FILE inside that folder in one request, via the compound
+  "approot:/{fileName}" colon-path form - undocumented behavior when
+  the folder doesn't exist yet, and observed in practice to come back
+  as a generic 400 invalidRequest rather than a clean 404 on a device/
+  account that has never used this app's OneDrive folder before.
+
+  Making the documented plain-GET form once per page load, before the
+  first compound-path call, sidesteps that edge case. Cached in module
+  state so this costs exactly one extra Graph round trip per session,
+  never per sync attempt.
+*/
+let appFolderProvisioned = false
+
+async function ensureAppFolderProvisioned(
+  authHeaders: Record<string, string>
+): Promise<CloudSyncTransportFailure | null> {
+
+  if (appFolderProvisioned) {
+    return null
+  }
+
+  let response: Response
+
+  try {
+    response = await fetch(GRAPH_APPROOT, { headers: authHeaders })
+  } catch (error) {
+    return { status: 'network-unreachable', detail: describeNetworkFailure(error) }
+  }
+
+  if (!response.ok) {
+    return classifyGraphFailure(response, await describeGraphError(response))
+  }
+
+  appFolderProvisioned = true
+  return null
+
+}
+
+/*
+  TEST-ONLY - overrides this module's internal provisioning state
+  between test cases (defaulted to true by every other test in this
+  file's beforeEach, matching a real page session that only ever
+  provisions once - only the dedicated provisioning tests set this
+  back to false first). Never called from production code.
+*/
+
+export function __setAppFolderProvisionedForTests(provisioned: boolean): void {
+  appFolderProvisioned = provisioned
+}
+
+/*
   READ
 
   Two Graph requests, deliberately: a metadata GET (no :/content) to
@@ -394,6 +451,12 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
   }
 
   const authHeaders = { Authorization: `Bearer ${accessToken}` }
+
+  const provisionFailure = await ensureAppFolderProvisioned(authHeaders)
+
+  if (provisionFailure) {
+    return provisionFailure
+  }
 
   let metadataResponse: Response
 
@@ -640,6 +703,14 @@ export async function writeCloudSyncDocument(
 
   if (!accessToken) {
     return { status: 'auth-failed' }
+  }
+
+  const provisionFailure = await ensureAppFolderProvisioned({
+    Authorization: `Bearer ${accessToken}`,
+  })
+
+  if (provisionFailure) {
+    return provisionFailure
   }
 
   const sessionHeaders: Record<string, string> = {
