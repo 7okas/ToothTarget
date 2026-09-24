@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
+import logo from './assets/logo.png'
 import { getActiveAccount, signIn, subscribeToActiveAccount } from './auth'
 import {
   getCloudSyncStatus,
@@ -177,12 +178,15 @@ export default function StartupGateScreen() {
 
           <>
 
-            <h2>Welcome back</h2>
+            <img
+              src={logo}
+              alt="ToothTarget"
+              className="startup-gate-logo"
+            />
 
             <p>
-              Sign in with your Microsoft account to keep this
-              device's patients, treatments, and templates
-              automatically backed up and synced to OneDrive.
+              Sign in with Microsoft to keep your data backed up to
+              OneDrive automatically.
             </p>
 
             <div className="startup-gate-actions">

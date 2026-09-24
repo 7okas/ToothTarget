@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.tsx'
 import SyncStatusIndicator from './SyncStatusIndicator.tsx'
 import StartupGateScreen from './StartupGateScreen.tsx'
+import CloudCorruptionRecoveryDialog from './CloudCorruptionRecoveryDialog.tsx'
 import { initializeMsal } from './auth.ts'
 
 /*
@@ -24,6 +25,7 @@ initializeMsal().finally(() => {
       <SyncStatusIndicator />
       <App />
       <StartupGateScreen />
+      <CloudCorruptionRecoveryDialog />
     </StrictMode>,
   )
 

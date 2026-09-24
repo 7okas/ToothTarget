@@ -8,13 +8,22 @@ import type {
 /*
   CLOUD BACKUP (snapshot, not sync)
 
-  This is a manual, explicit snapshot/restore layer on top of the
-  existing OneDrive App Folder file access in cloudStorage.ts - it
-  never talks to Microsoft Graph itself (see cloudStorage.ts for
-  that), and it never automatically uploads/downloads anything.
-  Nothing calls createCloudBackup()/applyCloudRestore() except the
-  "Backup to Cloud"/"Load from Cloud" buttons a dentist explicitly
-  presses in MicrosoftAccountSection.tsx.
+  This is a snapshot/restore layer on top of the existing OneDrive App
+  Folder file access in cloudStorage.ts - it never talks to Microsoft
+  Graph itself (see cloudStorage.ts for that), and never automatically
+  uploads/downloads anything on its own.
+
+  Phase 8 removed this module's original callers (the manual "Backup
+  to Cloud"/"Load from Cloud" buttons in MicrosoftAccountSection.tsx,
+  replaced by a single "Sync Now" button that triggers the existing
+  automatic two-way sync instead) - but rather than staying orphaned,
+  Phase 9 gave it two new callers: createCloudBackup() is what
+  cloudBackupRotation.ts's maybeRotateBackup() uploads into the
+  rotating A/B/C dated snapshot slots, and applyCloudRestore() is what
+  CloudCorruptionRecoveryDialog.tsx calls once the dentist explicitly
+  confirms restoring a backup after the live sync file turns out to
+  be unreadable. Same snapshot content/shape and same restore
+  behavior as before - only who calls them changed.
 
   Only type-only imports are taken from App.tsx (Patient/
   SavedTreatment/ProcedureTemplate/Procedure) - these are erased
@@ -63,7 +72,6 @@ const LOCAL_SAFETY_BACKUP_KEYS = [
   'toothTargetActiveTreatment',
   'toothTargetTemplates',
   'toothTargetProcedures',
-  'toothTargetPrivacyLock',
 ] as const
 
 function readLocalArray(key: string): unknown[] {
@@ -366,10 +374,11 @@ function downloadSafetyBackup(): void {
   RESTORE
 
   An explicit, user-confirmed SNAPSHOT RESTORE, not a merge and not
-  automatic sync - the caller (MicrosoftAccountSection.tsx) is
-  responsible for validating the backup and getting the dentist's
-  confirmation first; this function only ever runs once that's
-  already happened.
+  automatic sync - the caller (Phase 9's
+  CloudCorruptionRecoveryDialog.tsx) is responsible for validating the
+  backup (validateCloudBackup() above) and getting the dentist's
+  explicit confirmation first; this function only ever runs once
+  that's already happened.
 
   Only ever touches toothTargetPatients/toothTargetSavedTreatments/
   toothTargetTemplates/toothTargetProcedures:
@@ -386,9 +395,9 @@ function downloadSafetyBackup(): void {
     false), already present in localStorage, are preserved exactly
     as they are; the backup never contains built-ins to restore in
     the first place.
-  - toothTargetActiveTreatment, toothTargetIncompleteTreatments, and
-    toothTargetPrivacyLock are never written here at all - they stay
-    exactly as this device already has them.
+  - toothTargetActiveTreatment and toothTargetIncompleteTreatments are
+    never written here at all - they stay exactly as this device
+    already has them.
 
   Reloads the page afterward (same pattern App.tsx's own Import
   Backup already uses) so every screen re-hydrates from the new

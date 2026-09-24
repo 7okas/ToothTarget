@@ -74,10 +74,9 @@ import {
 
   Local-only (never read, written, or referenced by this file):
     toothTargetActiveTreatment, toothTargetIncompleteTreatments,
-    toothTargetPrivacyLock, toothTargetNextPatientNumber (see below -
-    reconciled locally, but never taken FROM the cloud document, which
-    doesn't carry it), built-in templates/procedures, MSAL state,
-    transient UI state.
+    toothTargetNextPatientNumber (see below - reconciled locally, but
+    never taken FROM the cloud document, which doesn't carry it),
+    built-in templates/procedures, MSAL state, transient UI state.
 
   ============================================================
   CRASH-SAFETY ANALYSIS (see report for the full writeup)
@@ -785,9 +784,10 @@ type AccountLocalCache = {
   deletionTombstones: unknown[]
   /*
     toothTargetNextPatientNumber is otherwise local-only/never-synced
-    (see this file's own top header comment) - but unlike active/
-    incomplete treatments or the privacy lock, it IS semantically tied
-    to THIS account's own patient numbering: left stale (eg. carried
+    (see this file's own top header comment) - but unlike other
+    local-only state such as active/incomplete treatments, it IS
+    semantically tied to THIS account's own patient numbering: left
+    stale (eg. carried
     over from whichever account happened to be active most recently),
     it can only ever ratchet up (never down, per commitLocalState()'s
     own Math.max reconciliation), so an account resuming after another

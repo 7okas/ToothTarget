@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react'
 import './App.css'
+import logo from './assets/logo.png'
 import BackButton from './BackButton'
 import MicrosoftAccountSection from './MicrosoftAccountSection'
 import TreatmentSummaryCard from './TreatmentSummaryCard'
@@ -629,7 +630,6 @@ const BACKUP_STORAGE_KEYS = [
   'toothTargetActiveTreatment',
   'toothTargetTemplates',
   'toothTargetProcedures',
-  'toothTargetPrivacyLock',
   'toothTargetDeletionTombstones',
 ] as const
 
@@ -661,37 +661,6 @@ function csvEscape(value: string) {
   }
 
   return value
-
-}
-
-/*
-  PRIVACY LOCK (Phase 15)
-
-  The PIN itself is never stored - only a salted SHA-256 hash, via
-  the Web Crypto API already built into every browser this PWA runs
-  in. A fresh random salt per enable/change keeps two dentists who
-  happen to pick the same 4 digits from ending up with the same
-  stored hash.
-*/
-
-function randomSalt() {
-
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-
-  return Array.from(bytes)
-    .map(byte => byte.toString(16).padStart(2, '0'))
-    .join('')
-
-}
-
-async function hashPin(pin: string, salt: string) {
-
-  const encoded = new TextEncoder().encode(salt + pin)
-  const digest = await crypto.subtle.digest('SHA-256', encoded)
-
-  return Array.from(new Uint8Array(digest))
-    .map(byte => byte.toString(16).padStart(2, '0'))
-    .join('')
 
 }
 
@@ -3110,99 +3079,6 @@ function App() {
     | 'staleReview'
   >('home')
 
-  /*
-    PRIVACY LOCK (Phase 15)
-
-    Read synchronously (lazy useState initializer) so the very first
-    render already knows whether the app should be locked - patient
-    and treatment data is never given a render pass to appear in
-    before the correct PIN is entered. A fresh install (no
-    toothTargetPrivacyLock entry at all) always resolves to
-    disabled/unlocked - the lock can only ever turn on from an
-    explicit dentist action, never by default.
-  */
-
-  const [privacyLockEnabled, setPrivacyLockEnabled] = useState(() => {
-
-    try {
-
-      const parsed = JSON.parse(
-        localStorage.getItem('toothTargetPrivacyLock') ?? 'null'
-      )
-
-      return (
-        parsed?.enabled === true &&
-        typeof parsed.salt === 'string' &&
-        typeof parsed.hash === 'string'
-      )
-
-    } catch {
-      return false
-    }
-
-  })
-
-  const [privacyLockSalt, setPrivacyLockSalt] = useState<string | null>(() => {
-
-    try {
-
-      const parsed = JSON.parse(
-        localStorage.getItem('toothTargetPrivacyLock') ?? 'null'
-      )
-
-      return typeof parsed?.salt === 'string' ? parsed.salt : null
-
-    } catch {
-      return null
-    }
-
-  })
-
-  const [privacyLockHash, setPrivacyLockHash] = useState<string | null>(() => {
-
-    try {
-
-      const parsed = JSON.parse(
-        localStorage.getItem('toothTargetPrivacyLock') ?? 'null'
-      )
-
-      return typeof parsed?.hash === 'string' ? parsed.hash : null
-
-    } catch {
-      return null
-    }
-
-  })
-
-  const [locked, setLocked] = useState(() => privacyLockEnabled)
-
-  const [pinGateInput, setPinGateInput] = useState('')
-
-  const [pinGateError, setPinGateError] = useState<string | null>(null)
-
-  /*
-    The Settings-screen PIN modal covers Enable / Change / Disable,
-    all built from the same 4-digit-entry stage machine so there's
-    one code path for "collect a PIN and act on it" instead of three.
-  */
-
-  const [pinModalPurpose, setPinModalPurpose] =
-    useState<'enable' | 'change' | 'disable' | null>(null)
-
-  const [pinModalStage, setPinModalStage] = useState<
-    | 'verify-current-for-change'
-    | 'verify-current-for-disable'
-    | 'new-pin'
-    | 'confirm-new-pin'
-    | null
-  >(null)
-
-  const [pinModalInput, setPinModalInput] = useState('')
-
-  const [pinModalFirstEntry, setPinModalFirstEntry] = useState('')
-
-  const [pinModalError, setPinModalError] = useState<string | null>(null)
-
   const [patientSearch, setPatientSearch] = useState('')
 
   const [treatmentSearchQuery, setTreatmentSearchQuery] = useState('')
@@ -4700,12 +4576,23 @@ const patientNames = Array.from(
   as a defensive fallback for a name that somehow isn't registered
   yet; openPatient() itself still only ever needs the plain name.
 */
-const patients = patientNames.map(name => ({
-  name,
-  patientNumber:
-    savedPatients.find(patient => patient.name === name)
-      ?.patientNumber ?? null,
-}))
+/*
+  Phase 8 - descending by patient number (highest first), regardless
+  of patientNames' own alphabetical order above - a null patientNumber
+  (defensive fallback only, see comment above) sorts last rather than
+  breaking the numeric comparison.
+*/
+const patients = patientNames
+  .map(name => ({
+    name,
+    patientNumber:
+      savedPatients.find(patient => patient.name === name)
+        ?.patientNumber ?? null,
+  }))
+  .sort(
+    (a, b) =>
+      (b.patientNumber ?? -Infinity) - (a.patientNumber ?? -Infinity)
+  )
 
   /*
     PATIENT AUTOCOMPLETE
@@ -6373,8 +6260,6 @@ async function openPatient(
 
     setPendingImportData(null)
 
-    closePinModal()
-
     setScreen('home')
 
   }
@@ -6618,199 +6503,6 @@ async function openPatient(
 
   }
 
-
-  /*
-    PRIVACY LOCK - APP-OPEN GATE (Phase 15)
-  */
-
-  async function pressPinGateDigit(digit: string) {
-
-    if (pinGateInput.length >= 4) {
-      return
-    }
-
-    const next = pinGateInput + digit
-
-    setPinGateInput(next)
-
-    if (next.length < 4) {
-      return
-    }
-
-    const computed = await hashPin(next, privacyLockSalt ?? '')
-
-    if (computed === privacyLockHash) {
-      setLocked(false)
-      setPinGateInput('')
-      setPinGateError(null)
-    } else {
-      setPinGateError('Incorrect PIN')
-      setPinGateInput('')
-    }
-
-  }
-
-  function backspacePinGateDigit() {
-    setPinGateInput(current => current.slice(0, -1))
-    setPinGateError(null)
-  }
-
-
-  /*
-    PRIVACY LOCK - SETTINGS PIN MODAL (Phase 15)
-
-    One 4-digit-entry stage machine handles all three flows -
-    Enable, Change, Disable - so there's a single place that collects
-    a PIN and reacts to it, instead of three near-duplicate ones.
-  */
-
-  function closePinModal() {
-    setPinModalPurpose(null)
-    setPinModalStage(null)
-    setPinModalInput('')
-    setPinModalFirstEntry('')
-    setPinModalError(null)
-  }
-
-  function requestEnablePrivacyLock() {
-    setPinModalPurpose('enable')
-    setPinModalStage('new-pin')
-    setPinModalInput('')
-    setPinModalFirstEntry('')
-    setPinModalError(null)
-  }
-
-  function requestChangePin() {
-    setPinModalPurpose('change')
-    setPinModalStage('verify-current-for-change')
-    setPinModalInput('')
-    setPinModalFirstEntry('')
-    setPinModalError(null)
-  }
-
-  function requestDisablePrivacyLock() {
-    setPinModalPurpose('disable')
-    setPinModalStage('verify-current-for-disable')
-    setPinModalInput('')
-    setPinModalFirstEntry('')
-    setPinModalError(null)
-  }
-
-  function backspacePinModalDigit() {
-    setPinModalInput(current => current.slice(0, -1))
-    setPinModalError(null)
-  }
-
-  async function pressPinModalDigit(digit: string) {
-
-    if (pinModalInput.length >= 4) {
-      return
-    }
-
-    const next = pinModalInput + digit
-
-    setPinModalInput(next)
-
-    if (next.length < 4) {
-      return
-    }
-
-    if (
-      pinModalStage === 'verify-current-for-change' ||
-      pinModalStage === 'verify-current-for-disable'
-    ) {
-
-      const computed = await hashPin(next, privacyLockSalt ?? '')
-
-      if (computed !== privacyLockHash) {
-        setPinModalError('Incorrect PIN')
-        setPinModalInput('')
-        return
-      }
-
-      if (pinModalStage === 'verify-current-for-disable') {
-
-        localStorage.removeItem('toothTargetPrivacyLock')
-
-        setPrivacyLockEnabled(false)
-        setPrivacyLockSalt(null)
-        setPrivacyLockHash(null)
-
-        closePinModal()
-
-        return
-
-      }
-
-      setPinModalError(null)
-      setPinModalInput('')
-      setPinModalStage('new-pin')
-
-      return
-
-    }
-
-    if (pinModalStage === 'new-pin') {
-      setPinModalFirstEntry(next)
-      setPinModalInput('')
-      setPinModalError(null)
-      setPinModalStage('confirm-new-pin')
-      return
-    }
-
-    if (pinModalStage === 'confirm-new-pin') {
-
-      if (next !== pinModalFirstEntry) {
-        setPinModalError("PINs didn't match - try again")
-        setPinModalInput('')
-        setPinModalFirstEntry('')
-        setPinModalStage('new-pin')
-        return
-      }
-
-      const salt = randomSalt()
-      const hash = await hashPin(next, salt)
-
-      localStorage.setItem(
-        'toothTargetPrivacyLock',
-        JSON.stringify({ enabled: true, salt, hash })
-      )
-
-      setPrivacyLockEnabled(true)
-      setPrivacyLockSalt(salt)
-      setPrivacyLockHash(hash)
-
-      closePinModal()
-
-      return
-
-    }
-
-  }
-
-  function pinModalTitle() {
-
-    if (pinModalStage === 'verify-current-for-change') {
-      return 'Enter Current PIN'
-    }
-
-    if (pinModalStage === 'verify-current-for-disable') {
-      return 'Enter PIN to Turn Off Privacy Lock'
-    }
-
-    if (pinModalStage === 'new-pin') {
-      return pinModalPurpose === 'change'
-        ? 'Set a New 4-Digit PIN'
-        : 'Set a 4-Digit PIN'
-    }
-
-    if (pinModalStage === 'confirm-new-pin') {
-      return 'Confirm Your PIN'
-    }
-
-    return ''
-
-  }
 
 
   /*
@@ -8092,89 +7784,6 @@ async function openPatient(
 
   /*
     =========================================
-    PRIVACY LOCK GATE (Phase 15)
-
-    This check runs before every other screen below it, so no
-    patient or treatment data - Home included - ever gets a render
-    pass while locked. Everything else in this component only
-    becomes reachable once the correct PIN clears it.
-    =========================================
-  */
-
-  if (locked) {
-
-    return (
-
-      <div className="app pin-gate">
-
-        <div className="header">
-          <h1>
-            ToothTarget
-          </h1>
-          <p>
-            Enter PIN
-          </p>
-        </div>
-
-        <div className="pin-dots-row">
-          {[0, 1, 2, 3].map(index => (
-            <span
-              key={index}
-              className={
-                index < pinGateInput.length
-                  ? 'pin-dot pin-dot-filled'
-                  : 'pin-dot'
-              }
-            />
-          ))}
-        </div>
-
-        {pinGateError && (
-          <p className="settings-error-message pin-gate-error">
-            {pinGateError}
-          </p>
-        )}
-
-        <div className="pin-keypad">
-
-          {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(digit => (
-            <button
-              key={digit}
-              type="button"
-              onClick={() => pressPinGateDigit(digit)}
-            >
-              {digit}
-            </button>
-          ))}
-
-          <div className="pin-keypad-spacer" />
-
-          <button
-            type="button"
-            onClick={() => pressPinGateDigit('0')}
-          >
-            0
-          </button>
-
-          <button
-            type="button"
-            className="pin-keypad-backspace"
-            onClick={backspacePinGateDigit}
-          >
-            ⌫
-          </button>
-
-        </div>
-
-      </div>
-
-    )
-
-  }
-
-
-  /*
-    =========================================
     HOME
     =========================================
   */
@@ -8187,9 +7796,11 @@ async function openPatient(
 
         <div className="header">
 
-          <h1>
-            ToothTarget
-          </h1>
+          <img
+            src={logo}
+            alt="ToothTarget"
+            className="home-logo"
+          />
 
           <p>
             Dental procedure timing
@@ -8238,12 +7849,13 @@ async function openPatient(
         )}
 
 
-        <div className="manage-templates-link">
+        <div className="home-nav-grid">
 
           <button
             type="button"
             onClick={() => setScreen('treatmentSearch')}
           >
+            <span className="home-nav-icon" aria-hidden="true">🔍</span>
             Search Treatments
           </button>
 
@@ -8251,6 +7863,7 @@ async function openPatient(
             type="button"
             onClick={() => setScreen('statistics')}
           >
+            <span className="home-nav-icon" aria-hidden="true">📊</span>
             Statistics
           </button>
 
@@ -8258,6 +7871,7 @@ async function openPatient(
             type="button"
             onClick={openManageTemplates}
           >
+            <span className="home-nav-icon" aria-hidden="true">🗂️</span>
             Manage Procedure Templates
           </button>
 
@@ -8265,6 +7879,7 @@ async function openPatient(
             type="button"
             onClick={() => setScreen('settings')}
           >
+            <span className="home-nav-icon" aria-hidden="true">⚙️</span>
             Settings
           </button>
 
@@ -8300,9 +7915,12 @@ async function openPatient(
           openPatient(patient.name)
         }
       >
-        {patient.patientNumber !== null &&
-          `${patient.patientNumber} — `}
-        {patient.name}
+        <span className="patient-list-item-number">
+          {patient.patientNumber !== null ? patient.patientNumber : ''}
+        </span>
+        <span className="patient-list-item-name">
+          {patient.name}
+        </span>
       </button>
 
     )
@@ -11849,64 +11467,6 @@ const patientTreatments =
             </p>
           )}
 
-
-          <h2 className="settings-section-title">
-            Privacy Lock
-          </h2>
-
-          {!privacyLockEnabled && (
-
-            <>
-
-              <p className="settings-section-description">
-                Require a 4-digit PIN before this app shows any
-                patient or treatment data. Off by default.
-              </p>
-
-              <div className="options-menu-list settings-actions">
-                <button
-                  type="button"
-                  onClick={requestEnablePrivacyLock}
-                >
-                  Turn On Privacy Lock
-                </button>
-              </div>
-
-            </>
-
-          )}
-
-          {privacyLockEnabled && (
-
-            <>
-
-              <p className="settings-section-description privacy-lock-status">
-                Privacy Lock is <strong>ON</strong>. A PIN is
-                required every time the app is opened.
-              </p>
-
-              <div className="options-menu-list settings-actions">
-
-                <button
-                  type="button"
-                  onClick={requestChangePin}
-                >
-                  Change PIN
-                </button>
-
-                <button
-                  type="button"
-                  onClick={requestDisablePrivacyLock}
-                >
-                  Turn Off Privacy Lock
-                </button>
-
-              </div>
-
-            </>
-
-          )}
-
         </div>
 
 
@@ -11923,14 +11483,6 @@ const patientTreatments =
               <p>
                 This backup contains: {pendingImportSummary}.
               </p>
-
-              {pendingImportData?.toothTargetPrivacyLock != null && (
-                <p>
-                  This backup also includes Privacy Lock settings -
-                  if you continue, this device will require the PIN
-                  it was set with.
-                </p>
-              )}
 
               <p>
                 Importing will replace your current data for
@@ -11964,80 +11516,6 @@ const patientTreatments =
 
         )}
 
-
-        {pinModalStage && (
-
-          <div className="modal-overlay">
-
-            <div className="modal-card">
-
-              <h2>
-                {pinModalTitle()}
-              </h2>
-
-              <div className="pin-dots-row">
-                {[0, 1, 2, 3].map(index => (
-                  <span
-                    key={index}
-                    className={
-                      index < pinModalInput.length
-                        ? 'pin-dot pin-dot-filled'
-                        : 'pin-dot'
-                    }
-                  />
-                ))}
-              </div>
-
-              {pinModalError && (
-                <p className="settings-error-message">
-                  {pinModalError}
-                </p>
-              )}
-
-              <div className="pin-keypad">
-
-                {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(digit => (
-                  <button
-                    key={digit}
-                    type="button"
-                    onClick={() => pressPinModalDigit(digit)}
-                  >
-                    {digit}
-                  </button>
-                ))}
-
-                <div className="pin-keypad-spacer" />
-
-                <button
-                  type="button"
-                  onClick={() => pressPinModalDigit('0')}
-                >
-                  0
-                </button>
-
-                <button
-                  type="button"
-                  className="pin-keypad-backspace"
-                  onClick={backspacePinModalDigit}
-                >
-                  ⌫
-                </button>
-
-              </div>
-
-              <button
-                type="button"
-                className="modal-cancel-button pin-modal-cancel-button"
-                onClick={closePinModal}
-              >
-                Cancel
-              </button>
-
-            </div>
-
-          </div>
-
-        )}
 
       </div>
 

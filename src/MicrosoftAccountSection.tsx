@@ -6,13 +6,6 @@ import {
   signOut,
   subscribeToActiveAccount,
 } from './auth'
-import { readCloudData, writeCloudData } from './cloudStorage'
-import {
-  createCloudBackup,
-  validateCloudBackup,
-  applyCloudRestore,
-  type CloudBackup,
-} from './cloudBackup'
 import {
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
@@ -20,7 +13,7 @@ import {
 } from './cloudSyncScheduler'
 import { reconcileSyncedAccount, syncCloudNow } from './cloudSyncEngine'
 import { signOutWithBestEffortSync } from './cloudSyncSignOut'
-import { formatDate } from './format'
+import { canTriggerManualSync } from './SyncStatusIndicator'
 
 /*
   Plain, non-technical copy only - never a raw Graph/ETag error (those
@@ -53,14 +46,22 @@ const CLOUD_SYNC_STATUS_LABEL: Record<
   Self-contained - it owns its own sign-in/sign-out/loading/error
   state and reads/writes nothing in App.tsx's state or localStorage
   keys directly. Signing in here is what makes automatic, multi-device
-  cloud sync active (see cloudSyncEngine.ts/cloudSyncScheduler.ts) and
-  enables the manual "Backup to Cloud"/"Load from Cloud" actions below
-  - both are real, in-production OneDrive features, not previews.
+  cloud sync active (see cloudSyncEngine.ts/cloudSyncScheduler.ts).
+
+  Phase 8 - "Sync Now" replaces the old separate "Backup to Cloud"/
+  "Load from Cloud" one-way snapshot actions with a single button that
+  triggers the SAME automatic two-way sync as every other trigger in
+  the app (requestCloudSync(), guarded by the same
+  canTriggerManualSync() SyncStatusIndicator.tsx's own manual-sync
+  affordance uses) - not a new sync mechanism. The underlying one-way
+  backup/restore functions (cloudBackup.ts, cloudStorage.ts's
+  readCloudData/writeCloudData) were left in place, just no longer
+  wired to any UI here.
 
   Reuses the existing settings-section-title / settings-section-
   description / settings-actions / settings-error-message classes
-  already used by Data Export and Privacy Lock above it, so this
-  looks like a natural third section rather than a bolted-on widget.
+  already used by Data Export above it, so this looks like a natural
+  second section rather than a bolted-on widget.
 */
 
 export default function MicrosoftAccountSection() {
@@ -101,41 +102,6 @@ export default function MicrosoftAccountSection() {
 
   const [error, setError] =
     useState<string | null>(null)
-
-  /*
-    CLOUD BACKUP / RESTORE (snapshot, not sync)
-
-    Backup: builds today's snapshot (createCloudBackup(), reading
-    straight from localStorage) and uploads it - a plain write, no
-    confirmation needed since it never touches anything on this
-    device.
-
-    Load: fetches + validates the cloud file first (cloudLoadError
-    covers "not signed in" / "no backup yet" / "corrupted" /
-    "unsupported schema version" - anything that means there is
-    nothing safe to offer). Only once a VALID backup comes back does
-    pendingCloudRestore hold it, which is what shows the explicit
-    confirmation below - applyCloudRestore() itself only ever runs
-    after the dentist presses that confirmation.
-  */
-
-  const [cloudBackupBusy, setCloudBackupBusy] =
-    useState(false)
-
-  const [cloudBackupResult, setCloudBackupResult] =
-    useState<{ success: boolean; message: string } | null>(null)
-
-  const [cloudLoadBusy, setCloudLoadBusy] =
-    useState(false)
-
-  const [cloudLoadError, setCloudLoadError] =
-    useState<string | null>(null)
-
-  const [pendingCloudRestore, setPendingCloudRestore] =
-    useState<CloudBackup | null>(null)
-
-  const [cloudRestoreBusy, setCloudRestoreBusy] =
-    useState(false)
 
   useEffect(() => {
 
@@ -226,95 +192,20 @@ export default function MicrosoftAccountSection() {
 
   }
 
-  async function handleBackupToCloud() {
-
-    setCloudBackupResult(null)
-    setCloudBackupBusy(true)
-
-    try {
-
-      const backup = createCloudBackup()
-
-      await writeCloudData(backup)
-
-      setCloudBackupResult({
-        success: true,
-        message: `Backed up ${backup.patients.length} patient(s), ${backup.savedTreatments.length} treatment(s), ${backup.customTemplates.length} custom template(s), and ${backup.customProcedures.length} custom procedure(s) to OneDrive.`,
-      })
-
-    } catch (error) {
-
-      const detail = error instanceof Error ? error.message : String(error)
-
-      setCloudBackupResult({
-        success: false,
-        message: `Backup failed: ${detail}`,
-      })
-
-    }
-
-    setCloudBackupBusy(false)
-
-  }
-
-  async function handleLoadFromCloud() {
-
-    setCloudLoadError(null)
-    setPendingCloudRestore(null)
-    setCloudLoadBusy(true)
-
-    try {
-
-      const data = await readCloudData<unknown>()
-
-      if (data === null) {
-
-        setCloudLoadError(
-          'No cloud backup was found yet. Use "Backup to Cloud" first.'
-        )
-
-      } else {
-
-        const result = validateCloudBackup(data)
-
-        if (result.valid) {
-          setPendingCloudRestore(result.backup)
-        } else {
-          setCloudLoadError(result.error)
-        }
-
-      }
-
-    } catch (error) {
-
-      const detail = error instanceof Error ? error.message : String(error)
-
-      setCloudLoadError(`Could not load the cloud backup: ${detail}`)
-
-    }
-
-    setCloudLoadBusy(false)
-
-  }
-
-  function cancelCloudRestore() {
-    setPendingCloudRestore(null)
-  }
-
   /*
-    applyCloudRestore() reloads the page itself on success, so there
-    is no matching setCloudRestoreBusy(false)/setPendingCloudRestore
-    (null) after it - this component is about to unmount anyway.
+    Phase 8 - "Sync Now": the same guard SyncStatusIndicator.tsx's own
+    clickable checkmark badge uses, re-checked here against the live
+    cloudSyncStatus rather than trusting the button's disabled state
+    alone, so this can never queue a duplicate/conflicting sync on top
+    of one already running or about to run.
   */
-  function confirmCloudRestore() {
+  function handleSyncNow() {
 
-    if (!pendingCloudRestore) {
+    if (!canTriggerManualSync(cloudSyncStatus)) {
       return
     }
 
-    setCloudRestoreBusy(true)
-
-    applyCloudRestore(pendingCloudRestore)
+    requestCloudSync()
 
   }
 
@@ -327,12 +218,8 @@ export default function MicrosoftAccountSection() {
       </h2>
 
       <p className="settings-section-description">
-        Sign in with Microsoft to keep your patients, treatments,
-        templates, and procedures backed up automatically to your
-        OneDrive App Folder in the background - no button needed.
-        "Backup to Cloud" and "Load from Cloud" below are separate: a
-        manual, full snapshot you can take any time, such as before a
-        big change or just for extra peace of mind.
+        Stay signed in to keep your data backed up to OneDrive
+        automatically.
       </p>
 
       {!isReady && (
@@ -374,41 +261,15 @@ export default function MicrosoftAccountSection() {
 
             <button
               type="button"
-              onClick={handleBackupToCloud}
-              disabled={cloudBackupBusy}
+              onClick={handleSyncNow}
+              disabled={!canTriggerManualSync(cloudSyncStatus)}
             >
-              {cloudBackupBusy ? 'Backing Up…' : 'Backup to Cloud'}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleLoadFromCloud}
-              disabled={cloudLoadBusy}
-            >
-              {cloudLoadBusy ? 'Checking Cloud…' : 'Load from Cloud'}
+              {cloudSyncStatus === 'syncing' || cloudSyncStatus === 'pending'
+                ? 'Syncing…'
+                : 'Sync Now'}
             </button>
 
           </div>
-
-          {cloudBackupResult && (
-
-            <p
-              className={
-                cloudBackupResult.success
-                  ? 'settings-section-description privacy-lock-status'
-                  : 'settings-error-message'
-              }
-            >
-              {cloudBackupResult.message}
-            </p>
-
-          )}
-
-          {cloudLoadError && (
-            <p className="settings-error-message">
-              {cloudLoadError}
-            </p>
-          )}
 
         </>
 
@@ -434,63 +295,6 @@ export default function MicrosoftAccountSection() {
         <p className="settings-error-message">
           {error}
         </p>
-      )}
-
-      {pendingCloudRestore && (
-
-        <div className="modal-overlay">
-
-          <div className="modal-card">
-
-            <h2>
-              Restore from Cloud?
-            </h2>
-
-            <p>
-              This device's <strong>patients</strong> (
-              {pendingCloudRestore.patients.length}),{' '}
-              <strong>completed treatments</strong> (
-              {pendingCloudRestore.savedTreatments.length}), and{' '}
-              <strong>custom templates/procedures</strong> will be
-              replaced with the backup from{' '}
-              {formatDate(pendingCloudRestore.exportedAt)}.
-            </p>
-
-            <p>
-              Your active/incomplete treatments and Privacy Lock
-              setting on this device will not be changed. A safety
-              backup of this device's current data will download
-              automatically before the restore happens - if anything
-              looks wrong afterward, that file can be restored via
-              the Import Backup option in Settings below.
-            </p>
-
-            <div className="modal-actions">
-
-              <button
-                type="button"
-                className="modal-cancel-button"
-                onClick={cancelCloudRestore}
-                disabled={cloudRestoreBusy}
-              >
-                Cancel
-              </button>
-
-              <button
-                type="button"
-                className="button-danger"
-                onClick={confirmCloudRestore}
-                disabled={cloudRestoreBusy}
-              >
-                {cloudRestoreBusy ? 'Restoring…' : 'Restore from Cloud'}
-              </button>
-
-            </div>
-
-          </div>
-
-        </div>
-
       )}
 
     </>

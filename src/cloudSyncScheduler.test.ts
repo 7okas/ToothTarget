@@ -4,7 +4,21 @@ vi.mock('./cloudSyncEngine', () => ({
   syncCloudNow: vi.fn(),
 }))
 
+/*
+  Phase 9 - cloudBackupRotation.ts's own module chain reaches
+  cloudStorage.ts -> ./auth -> authConfig.ts, which touches
+  `window.location` at module scope (same MSAL/window issue every
+  other test file mocking a cloud module already documents) -
+  mocked here purely to keep loading this file crash-free, not
+  because its own rotation logic is under test here (see
+  cloudBackupRotation.test.ts for that).
+*/
+vi.mock('./cloudBackupRotation', () => ({
+  maybeRotateBackup: vi.fn(),
+}))
+
 import { syncCloudNow } from './cloudSyncEngine'
+import { maybeRotateBackup } from './cloudBackupRotation'
 import {
   requestCloudSync,
   requestCloudSyncIfSignedIn,
@@ -19,6 +33,7 @@ import {
 } from './cloudSyncScheduler'
 
 const mockedSyncCloudNow = vi.mocked(syncCloudNow)
+const mockedMaybeRotateBackup = vi.mocked(maybeRotateBackup)
 
 /*
   Flushes pending microtasks - requestCloudSync() schedules work via
@@ -41,6 +56,8 @@ beforeEach(() => {
     status: 'synced',
     patientNumberConflicts: [],
   })
+  mockedMaybeRotateBackup.mockReset()
+  mockedMaybeRotateBackup.mockResolvedValue(undefined)
 })
 
 describe('requestCloudSync - coalescing', () => {
@@ -263,6 +280,34 @@ describe('requestCloudSync - success', () => {
     const returnValue = requestCloudSync()
 
     expect(returnValue).toBeUndefined()
+
+  })
+
+})
+
+describe('requestCloudSync - dated backup rotation hook (Phase 9)', () => {
+
+  it('fires maybeRotateBackup() after a successful sync', async () => {
+
+    requestCloudSync()
+
+    await flushMicrotasks()
+
+    expect(mockedMaybeRotateBackup).toHaveBeenCalledTimes(1)
+
+  })
+
+  it('does not fire maybeRotateBackup() after a failed sync', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'auth-failed',
+    })
+
+    requestCloudSync()
+
+    await flushMicrotasks()
+
+    expect(mockedMaybeRotateBackup).not.toHaveBeenCalled()
 
   })
 

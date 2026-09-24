@@ -5,23 +5,31 @@ import { migrateCloudSyncDocumentShape } from './cloudSyncSchemaMigration'
 /*
   CLOUD STORAGE (Microsoft Graph OneDrive App Folder)
 
-  Read/write helpers for ToothTarget's two cloud data files, both
-  inside the signed-in Microsoft account's OneDrive App Folder
+  Read/write/list/delete helpers for everything ToothTarget stores in
+  the signed-in Microsoft account's OneDrive App Folder
   (Files.ReadWrite.AppFolder - already granted, no new scopes here):
 
-    - toothtarget-data.json (readCloudData()/writeCloudData() below) -
-      used only by cloudBackup.ts's createCloudBackup()/
-      applyCloudRestore(), the manual, explicit "Backup to Cloud"/
-      "Load from Cloud" actions a dentist presses in
-      MicrosoftAccountSection.tsx.
+    - readCloudData()/writeCloudData() below - generic, named-file
+      read/write (Phase 9: generalized from a single hardcoded
+      filename to an explicit `fileName` parameter, once that fixed
+      file's only two callers - the old "Backup to Cloud"/"Load from
+      Cloud" buttons - were removed in Phase 8). Currently used by
+      cloudBackupRotation.ts (the dated A/B/C snapshot files) and
+      cloudBackup.ts's own restore-fallback lookup - each passes its
+      own explicit file name, so multiple independent callers can
+      each own their own file(s) without colliding.
+    - listAppFolderFileNames()/deleteCloudFile() below (Phase 9, new)
+      - list and delete, for the same reason: discovering which dated
+        A/B/C snapshot files currently exist, and retiring the oldest
+        one in a rotation slot.
     - toothtarget-sync.json (readCloudSyncDocument()/
       writeCloudSyncDocument() below) - the real-time, automatic,
       multi-device sync document, used only by cloudSyncEngine.ts's
-      syncCloudNow().
-
-  Kept as two separate files/functions on purpose, so the manual
-  backup/restore feature and automatic background sync can never
-  overwrite each other - each has exactly one writer.
+      syncCloudNow(). Kept as its own dedicated pair of functions
+      (never layered on readCloudData()/writeCloudData() above) so
+      the one file every device's automatic sync depends on can never
+      collide with any named snapshot file another feature happens to
+      read/write/list/delete.
 
   ============================================================
   SYNC DOCUMENT TRANSPORT (ETag-conditional)
@@ -31,8 +39,8 @@ import { migrateCloudSyncDocumentShape } from './cloudSyncSchemaMigration'
   SEPARATE pair of functions for the CloudSyncDocument (v2 schema,
   cloudSync.ts) - deliberately NOT layered on top of readCloudData()/
   writeCloudData() above, and deliberately targeting a DIFFERENT file
-  name (see CLOUD_SYNC_FILE_NAME below), so the sync document and a
-  manual backup can never collide over one shared file.
+  name (see CLOUD_SYNC_FILE_NAME below), so the sync document and any
+  named snapshot file can never collide over one shared file.
 
   Called automatically by cloudSyncEngine.ts's syncCloudNow() - on app
   load, on Microsoft sign-in, and after every synchronized-data change
@@ -45,8 +53,6 @@ import { migrateCloudSyncDocumentShape } from './cloudSyncSchemaMigration'
 
 const GRAPH_APPROOT =
   'https://graph.microsoft.com/v1.0/me/drive/special/approot'
-
-const CLOUD_DATA_FILE_NAME = 'toothtarget-data.json'
 
 /*
   Reads a Graph error response body for a useful message (Graph
@@ -89,20 +95,22 @@ async function requireAccessToken(): Promise<string> {
 /*
   READ
 
-  Downloads and parses toothtarget-data.json from the App Folder.
-  Returns null (not an error) when the file simply doesn't exist yet
-  - eg. before it has ever been written - since that is an expected,
-  normal state, not a failure. Throws a plain-language Error for
-  anything else (not signed in, network/Graph failure, or a file that
-  exists but isn't valid JSON).
+  Downloads and parses the named file from the App Folder. Returns
+  null (not an error) when the file simply doesn't exist yet - eg.
+  before it has ever been written - since that is an expected, normal
+  state, not a failure. Throws a plain-language Error for anything
+  else (not signed in, network/Graph failure, or a file that exists
+  but isn't valid JSON).
 */
 
-export async function readCloudData<T = unknown>(): Promise<T | null> {
+export async function readCloudData<T = unknown>(
+  fileName: string
+): Promise<T | null> {
 
   const accessToken = await requireAccessToken()
 
   const response = await fetch(
-    `${GRAPH_APPROOT}:/${CLOUD_DATA_FILE_NAME}:/content`,
+    `${GRAPH_APPROOT}:/${fileName}:/content`,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -116,7 +124,7 @@ export async function readCloudData<T = unknown>(): Promise<T | null> {
 
   if (!response.ok) {
     throw new Error(
-      `Could not read ${CLOUD_DATA_FILE_NAME} from the OneDrive App Folder (${await describeGraphError(response)}).`
+      `Could not read ${fileName} from the OneDrive App Folder (${await describeGraphError(response)}).`
     )
   }
 
@@ -127,7 +135,7 @@ export async function readCloudData<T = unknown>(): Promise<T | null> {
   } catch {
 
     throw new Error(
-      `${CLOUD_DATA_FILE_NAME} was downloaded but could not be parsed as JSON.`
+      `${fileName} was downloaded but could not be parsed as JSON.`
     )
 
   }
@@ -137,18 +145,21 @@ export async function readCloudData<T = unknown>(): Promise<T | null> {
 /*
   WRITE
 
-  Creates or overwrites toothtarget-data.json in the App Folder with
-  the JSON-serialized form of whatever is passed in. Throws a
-  plain-language Error on failure (not signed in, or the Graph
-  request itself failing).
+  Creates or overwrites the named file in the App Folder with the
+  JSON-serialized form of whatever is passed in. Throws a plain-
+  language Error on failure (not signed in, or the Graph request
+  itself failing).
 */
 
-export async function writeCloudData(data: unknown): Promise<void> {
+export async function writeCloudData(
+  fileName: string,
+  data: unknown
+): Promise<void> {
 
   const accessToken = await requireAccessToken()
 
   const response = await fetch(
-    `${GRAPH_APPROOT}:/${CLOUD_DATA_FILE_NAME}:/content`,
+    `${GRAPH_APPROOT}:/${fileName}:/content`,
     {
       method: 'PUT',
       headers: {
@@ -161,7 +172,87 @@ export async function writeCloudData(data: unknown): Promise<void> {
 
   if (!response.ok) {
     throw new Error(
-      `Could not write ${CLOUD_DATA_FILE_NAME} to the OneDrive App Folder (${await describeGraphError(response)}).`
+      `Could not write ${fileName} to the OneDrive App Folder (${await describeGraphError(response)}).`
+    )
+  }
+
+}
+
+/*
+  LIST (Phase 9 - dated backup rotation/discovery)
+
+  Returns just the file names directly inside the App Folder (not
+  subfolders' contents, not any other metadata) - enough for
+  cloudBackupRotation.ts/cloudBackup.ts to find which dated
+  toothtarget-backup-<slot>-<date>.json files currently exist without
+  needing to guess a exact filename to fetch first (which would be
+  impossible - the date in the name is exactly the thing being
+  discovered here).
+*/
+
+export async function listAppFolderFileNames(): Promise<string[]> {
+
+  const accessToken = await requireAccessToken()
+
+  const response = await fetch(
+    `${GRAPH_APPROOT}/children?$select=name`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error(
+      `Could not list the OneDrive App Folder (${await describeGraphError(response)}).`
+    )
+  }
+
+  const body = await response.json()
+
+  if (!Array.isArray(body?.value)) {
+    throw new Error(
+      'The OneDrive App Folder listing had an unexpected shape.'
+    )
+  }
+
+  return body.value
+    .map((item: unknown) =>
+      typeof (item as { name?: unknown })?.name === 'string'
+        ? (item as { name: string }).name
+        : null
+    )
+    .filter((name: string | null): name is string => name !== null)
+
+}
+
+/*
+  DELETE (Phase 9 - dated backup rotation)
+
+  Removes the named file from the App Folder. Treats an already-
+  missing file (404) as success rather than an error - deleting
+  something that's already gone achieves the caller's actual goal
+  ("this slot's old dated file should no longer exist") either way.
+*/
+
+export async function deleteCloudFile(fileName: string): Promise<void> {
+
+  const accessToken = await requireAccessToken()
+
+  const response = await fetch(
+    `${GRAPH_APPROOT}:/${fileName}`,
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  )
+
+  if (!response.ok && response.status !== 404) {
+    throw new Error(
+      `Could not delete ${fileName} from the OneDrive App Folder (${await describeGraphError(response)}).`
     )
   }
 

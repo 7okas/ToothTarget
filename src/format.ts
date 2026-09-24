@@ -62,6 +62,50 @@ export function formatSignedTime(
 
 }
 
+/*
+  "Synced X minutes/hours/days ago" for the sync status indicator -
+  purely a display of an existing timestamp (see
+  deviceSyncTracking.ts's getDeviceLastSyncAt()), never a computed
+  sync fact of its own. `now` is a parameter (defaulting to the real
+  clock) so this stays pure and testable the same way every other
+  helper in this file is.
+*/
+export function formatRelativeTime(
+  isoTimestamp: string,
+  now: Date = new Date()
+): string {
+
+  const thenMs = Date.parse(isoTimestamp)
+
+  if (Number.isNaN(thenMs)) {
+    return ''
+  }
+
+  const diffSeconds =
+    Math.max(0, Math.round((now.getTime() - thenMs) / 1000))
+
+  if (diffSeconds < 60) {
+    return 'Just now'
+  }
+
+  const diffMinutes = Math.floor(diffSeconds / 60)
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60)
+
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`
+  }
+
+  const diffDays = Math.floor(diffHours / 24)
+
+  return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`
+
+}
+
 export function formatDate(
   date: string
 ) {

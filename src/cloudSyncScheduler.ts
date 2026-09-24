@@ -1,6 +1,7 @@
 import { syncCloudNow, type CloudSyncResult } from './cloudSyncEngine'
 import type { StaleReviewCandidate } from './staleRecordReview'
 import { classifySyncOutcome, type SyncOutcomeReason } from './syncOutcome'
+import { maybeRotateBackup } from './cloudBackupRotation'
 
 /*
   CLOUD SYNC SCHEDULER (Phase 7 - integration)
@@ -9,8 +10,16 @@ import { classifySyncOutcome, type SyncOutcomeReason } from './syncOutcome'
   already-successfully-committed change to the synchronized dataset
   (patients/savedTreatments/customTemplates/customProcedures/
   deletionTombstones): requestCloudSync(). It never contains merge or
-  Graph logic itself - it only decides WHEN to call Phase 6's
+  Graph logic of its OWN - it only decides WHEN to call Phase 6's
   syncCloudNow(), and coalesces bursts of requests into a single call.
+
+  Phase 9 addition: every successful attempt also fires
+  maybeRotateBackup() (cloudBackupRotation.ts) - fire-and-forget, see
+  that call site's own comment. This is the one exception to "no
+  Graph logic of its own" in spirit, not in fact: the actual Graph
+  calls still live in cloudBackupRotation.ts/cloudStorage.ts, this
+  file only decides WHEN to fire them, exactly like it already does
+  for syncCloudNow() itself.
 
   ============================================================
   COALESCING
@@ -303,7 +312,24 @@ function startIfIdle(): void {
           setPendingStaleReview(result.candidates)
         }
 
-        return isSuccessStatus(result)
+        const succeeded = isSuccessStatus(result)
+
+        /*
+          Phase 9 - dated backup rotation. Deliberately fire-and-
+          forget: not awaited, and its own promise is never returned
+          from here, so it can never delay or affect this scheduler's
+          own status transition below. maybeRotateBackup() already
+          swallows and logs its own failures internally and should
+          never reject - the trailing .catch() here is the same
+          defensive-only backstop this file's own header comment
+          already applies to syncCloudNow() itself, in case that
+          contract is ever violated.
+        */
+        if (succeeded) {
+          maybeRotateBackup().catch(() => {})
+        }
+
+        return succeeded
 
       },
       () => {

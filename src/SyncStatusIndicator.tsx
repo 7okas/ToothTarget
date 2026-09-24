@@ -5,9 +5,12 @@ import {
   subscribeCloudSyncStatus,
   getLastSyncOutcome,
   subscribeLastSyncOutcome,
+  requestCloudSync,
   type CloudSyncStatus,
 } from './cloudSyncScheduler'
 import { describeSyncOutcome, type SyncOutcomeReason } from './syncOutcome'
+import { getDeviceLastSyncAt } from './deviceSyncTracking'
+import { formatRelativeTime } from './format'
 
 /*
   PERSISTENT SYNC STATUS INDICATOR
@@ -23,8 +26,12 @@ import { describeSyncOutcome, type SyncOutcomeReason } from './syncOutcome'
 
   Purely a display of state that already exists elsewhere
   (cloudSyncScheduler.ts's status/lastSyncOutcome stores, auth.ts's
-  active account) - this component never calls requestCloudSync() or
-  anything else that could influence sync behavior itself.
+  active account) - the one exception (Phase 8) is the manual
+  "tap the badge to sync now" affordance below (the whole badge is
+  the tap target, not just the checkmark - easier to hit on a touch
+  device), which calls requestCloudSync() itself rather than defining
+  any sync logic of its own; every other branch here still only ever
+  renders what already exists elsewhere.
 
   Always shows SOMETHING relevant once mounted (no more "shows nothing
   if signed out"): "Sign in needed" (signed out), a spinner (syncing),
@@ -152,6 +159,22 @@ export function reduceSyncIndicatorState(
 
 }
 
+/*
+  MANUAL SYNC-ON-CLICK GUARD (Phase 8)
+
+  Pure, same reasoning as reduceSyncIndicatorState() above - kept
+  testable without a React rendering harness (see this file's own
+  test file). The clickable badge only ever renders while the icon
+  shows 'success' (see the render below), which itself already
+  implies currentStatus === 'idle' - but this re-checks the live
+  status directly rather than trusting that derived icon state, so a
+  tap can never queue a duplicate/conflicting sync on top of one
+  already running or about to run.
+*/
+export function canTriggerManualSync(status: CloudSyncStatus): boolean {
+  return status !== 'syncing' && status !== 'pending'
+}
+
 const AUTO_HIDE_MS = 10000
 const FADE_MS = 400
 
@@ -191,6 +214,39 @@ export default function SyncStatusIndicator() {
   )
 
   const [fading, setFading] = useState(false)
+
+  /*
+    RELATIVE LAST-SYNC TIME (Phase 8 - UI polish)
+
+    Purely a re-render tick so "X minutes ago" keeps advancing while
+    the badge just sits there with no other state change - the actual
+    timestamp still comes from deviceSyncTracking.ts's
+    getDeviceLastSyncAt() on every render, never stored here.
+  */
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+
+    const interval = setInterval(() => setNow(new Date()), 60000)
+
+    return () => clearInterval(interval)
+
+  }, [])
+
+  const deviceLastSyncAt = getDeviceLastSyncAt()
+
+  const relativeSyncText =
+    deviceLastSyncAt ? formatRelativeTime(deviceLastSyncAt, now) : null
+
+  function handleManualSync() {
+
+    if (!canTriggerManualSync(status)) {
+      return
+    }
+
+    requestCloudSync()
+
+  }
 
   useEffect(() => {
 
@@ -253,13 +309,13 @@ export default function SyncStatusIndicator() {
     )
   }
 
-  if (!state.icon && !state.text) {
+  if (!state.icon && !state.text && !relativeSyncText) {
     return null
   }
 
-  return (
+  const badgeContent = (
 
-    <div className="sync-status-badge">
+    <>
 
       {state.icon && (
         <span
@@ -283,8 +339,41 @@ export default function SyncStatusIndicator() {
         </span>
       )}
 
-    </div>
+      {relativeSyncText && (
+        <span className="sync-status-relative-time">
+          {relativeSyncText}
+        </span>
+      )}
 
+    </>
+
+  )
+
+  /*
+    Phase 8 (widened tap target) - the ENTIRE badge is the manual-sync
+    button while the icon shows 'success', not just the small
+    checkmark glyph - a bigger, easier target on a touch device. Every
+    other state (spinner/attention/failure, or no icon at all) still
+    renders as the original plain, non-interactive <div>.
+  */
+  if (state.icon === 'success') {
+    return (
+      <button
+        type="button"
+        className="sync-status-badge sync-status-badge-clickable"
+        aria-label="Sync now"
+        title="Sync now"
+        onClick={handleManualSync}
+      >
+        {badgeContent}
+      </button>
+    )
+  }
+
+  return (
+    <div className="sync-status-badge">
+      {badgeContent}
+    </div>
   )
 
 }

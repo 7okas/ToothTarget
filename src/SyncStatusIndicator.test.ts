@@ -41,10 +41,12 @@ vi.mock('./cloudSyncScheduler', () => ({
   subscribeCloudSyncStatus: vi.fn(),
   getLastSyncOutcome: vi.fn(),
   subscribeLastSyncOutcome: vi.fn(),
+  requestCloudSync: vi.fn(),
 }))
 
 import {
   reduceSyncIndicatorState,
+  canTriggerManualSync,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
 } from './SyncStatusIndicator'
@@ -420,6 +422,26 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
       text: { label: describeSyncOutcome(SYNCED).label, autoHide: true },
     })
 
+  })
+
+})
+
+describe('canTriggerManualSync - the "click the checkmark to sync now" guard (Phase 8)', () => {
+
+  it('allows triggering when idle (the only status the success icon actually shows for)', () => {
+    expect(canTriggerManualSync('idle')).toBe(true)
+  })
+
+  it('allows triggering when unavailable (a click from the failure/attention icon path is still safe, even though the UI never wires one up)', () => {
+    expect(canTriggerManualSync('unavailable')).toBe(true)
+  })
+
+  it('refuses to trigger while a sync is pending (about to start)', () => {
+    expect(canTriggerManualSync('pending')).toBe(false)
+  })
+
+  it('refuses to trigger while a sync is actively running - no duplicate/conflicting sync queued on top of one in flight', () => {
+    expect(canTriggerManualSync('syncing')).toBe(false)
   })
 
 })
