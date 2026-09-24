@@ -30,3 +30,14 @@ initializeMsal().finally(() => {
   )
 
 })
+
+/*
+  Registered after load so it never delays first render. Scoped via
+  BASE_URL because the production build is served from /ToothTarget/,
+  not the site root - registering "/sw.js" there would 404.
+*/
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`)
+  })
+}
