@@ -952,8 +952,8 @@ function settleActualTime(
   enough to a treatment to trust at all.
 */
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function migrateActiveTreatmentShape(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   parsed: any,
   nowMs: number
 ): ActiveTreatment | null {
@@ -3521,7 +3521,9 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
                       totalActualDuration - totalExpectedDuration
                     )
 
-              const { tooth: _legacyTooth, ...rest } = treatment
+              // Legacy field, dropped so it doesn't linger in storage.
+              const rest = { ...treatment }
+              delete rest.tooth
 
               return {
 
@@ -4086,6 +4088,31 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
         savedTreatmentDateResult.changed ||
         savedTreatmentTimestampResult.changed
 
+      /*
+        This whole effect (see its own opening comment above, and its
+        `[]` dependency array) runs exactly once at mount to
+        synchronize React state with an external system - localStorage
+        - genuinely the case react-hooks/set-state-in-effect exists to
+        allow, not the "deriving state from a changing prop" anti-
+        pattern it flags: there is no reactive input here to instead
+        compute during render. It also performs real side effects
+        (tombstone writes, requestCloudSync(), console logging)
+        interleaved with committing SEVEN independent pieces of state
+        (this one plus setPatientNumberConflicts/setActiveTreatment/
+        setShowResumePrompt below, and setSavedPatients/
+        setPatientNumberConflicts/setSavedTreatments/
+        setIncompleteTreatments/setActiveTreatment again in the catch
+        fallback, and setTemplates/setProcedures at the very end) -
+        collapsing that into per-atom useState lazy initializers isn't
+        a mechanical change; it would mean restructuring this entire
+        startup migration pipeline (other mount effects below
+        explicitly depend on this one having already run - see the
+        ACCOUNT-SWITCH ISOLATION comment further down), which is out
+        of scope for a lint fix and risks the correctness of delicate,
+        load-bearing data-migration/tombstoning logic no test harness
+        in this project currently exercises end-to-end.
+      */
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSavedPatients(finalPatients)
       setSavedTreatments(finalSavedTreatments)
       setIncompleteTreatments(finalIncompleteTreatments)
@@ -4323,27 +4350,31 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
 
     Only ever auto-navigates while `screen === 'home'` - never yanks the
     dentist away from an active treatment timer, an in-progress patient
-    edit, or anything else mid-workflow. This still reliably surfaces
-    the review the moment it's actually safe to: `screen` is in the
-    dependency list precisely so that landing back on Home later (after
-    finishing whatever the dentist was doing when the review first
-    became pending) re-runs this check and navigates then, rather than
-    only checking once at the instant pendingStaleReview first appears.
-    A dentist who never returns to Home still sees the warning banner
-    rendered on that screen (see the 'home' screen below) and can open
-    the review manually at any time in the meantime.
+    edit, or anything else mid-workflow. Adjusted directly during
+    render (not inside a useEffect - see
+    https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
+    rather than a useEffect keyed on [pendingStaleReview, screen]: a
+    synchronous setState() call at a useEffect's own top level causes
+    an extra, avoidable render pass (react-hooks/set-state-in-effect),
+    and this check needs no such deferral - it's naturally self-
+    terminating, since setScreen('staleReview') makes `screen ===
+    'home'` false on the very next check, so it can never re-fire for
+    the same pending review. This still reliably surfaces the review
+    the moment it's actually safe to: re-evaluated on every render,
+    it catches landing back on Home later (after finishing whatever
+    the dentist was doing when the review first became pending) just
+    as the old effect's dependency array did. A dentist who never
+    returns to Home still sees the warning banner rendered on that
+    screen (see the 'home' screen below) and can open the review
+    manually at any time in the meantime.
   */
-  useEffect(() => {
-
-    if (
-      pendingStaleReview &&
-      pendingStaleReview.length > 0 &&
-      screen === 'home'
-    ) {
-      setScreen('staleReview')
-    }
-
-  }, [pendingStaleReview, screen])
+  if (
+    pendingStaleReview &&
+    pendingStaleReview.length > 0 &&
+    screen === 'home'
+  ) {
+    setScreen('staleReview')
+  }
 
 
   /*
@@ -9224,8 +9255,12 @@ const patientTreatments =
       radius
 
 
-    let strokeDashoffset =
-      circumference
+    /*
+      No initializer - both branches below unconditionally assign it
+      before it's ever read; an initial `= circumference` here was a
+      dead write (no-useless-assignment).
+    */
+    let strokeDashoffset: number
 
 
     if (!isOvertime) {

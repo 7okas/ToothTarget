@@ -6,6 +6,40 @@ import {
   CLOUD_SYNC_APP,
 } from './cloudSync'
 
+/*
+  Returns a shallow copy of `obj` with the named keys removed -  used
+  throughout this file to build a "record missing field X" fixture
+  without a `const { x: _drop, ...rest } = obj` destructure, which
+  leaves `_drop` an unused binding (@typescript-eslint/no-unused-vars).
+*/
+function omit<T extends Record<string, unknown>>(
+  obj: T,
+  ...keys: (keyof T)[]
+): Record<string, unknown> {
+
+  const clone: Record<string, unknown> = { ...obj }
+
+  for (const key of keys) {
+    delete clone[key as string]
+  }
+
+  return clone
+
+}
+
+/*
+  What every migrateCloudSyncDocumentShape() result this file inspects
+  actually needs to expose - a precise stand-in for the real return
+  type (`unknown`, since that function's own input can be anything -
+  see its own header comment) so these tests can read
+  `.patients[0].createdAt` etc. without `as any`.
+*/
+type MigratedDocument = {
+  patients: Record<string, unknown>[]
+  savedTreatments: Record<string, unknown>[]
+  customProcedures: Record<string, unknown>[]
+}
+
 function makeDocument(overrides: Record<string, unknown> = {}) {
   return {
     schemaVersion: CLOUD_SYNC_SCHEMA_VERSION,
@@ -60,12 +94,14 @@ describe('migrateCloudSyncDocumentShape - patient createdAt backfill', () => {
 
   it('backfills a missing createdAt from the patient\'s own updatedAt, and the migrated document then passes strict validation', () => {
 
-    const { createdAt: _drop, ...patientWithoutCreatedAt } =
-      makePatient({ updatedAt: '2025-06-01T00:00:00.000Z' })
+    const patientWithoutCreatedAt = omit(
+      makePatient({ updatedAt: '2025-06-01T00:00:00.000Z' }),
+      'createdAt'
+    )
 
     const document = makeDocument({ patients: [patientWithoutCreatedAt] })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.patients[0].createdAt).toBe('2025-06-01T00:00:00.000Z')
 
@@ -83,7 +119,7 @@ describe('migrateCloudSyncDocumentShape - patient createdAt backfill', () => {
 
     const document = makeDocument({ patients: [patient] })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.patients[0].createdAt).toBe('2024-01-01T00:00:00.000Z')
 
@@ -91,12 +127,11 @@ describe('migrateCloudSyncDocumentShape - patient createdAt backfill', () => {
 
   it('leaves a patient untouched (no fabricated createdAt) when updatedAt is ALSO missing, so validation still correctly rejects it', () => {
 
-    const { createdAt: _drop, updatedAt: _drop2, ...bothMissing } =
-      makePatient()
+    const bothMissing = omit(makePatient(), 'createdAt', 'updatedAt')
 
     const document = makeDocument({ patients: [bothMissing] })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.patients[0].createdAt).toBeUndefined()
 
@@ -111,14 +146,16 @@ describe('migrateCloudSyncDocumentShape - saved treatment updatedAt backfill', (
 
   it('backfills a missing updatedAt from completedAt, and the migrated document then passes strict validation', () => {
 
-    const { updatedAt: _drop, ...treatmentWithoutUpdatedAt } =
-      makeTreatment({ completedAt: '2025-03-05T00:00:00.000Z' })
+    const treatmentWithoutUpdatedAt = omit(
+      makeTreatment({ completedAt: '2025-03-05T00:00:00.000Z' }),
+      'updatedAt'
+    )
 
     const document = makeDocument({
       savedTreatments: [treatmentWithoutUpdatedAt],
     })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.savedTreatments[0].updatedAt).toBe('2025-03-05T00:00:00.000Z')
 
@@ -129,12 +166,15 @@ describe('migrateCloudSyncDocumentShape - saved treatment updatedAt backfill', (
 
   it('falls back to date when completedAt is also missing/invalid', () => {
 
-    const { updatedAt: _drop, completedAt: _drop2, ...treatment } =
-      makeTreatment({ date: '2025-03-09' })
+    const treatment = omit(
+      makeTreatment({ date: '2025-03-09' }),
+      'updatedAt',
+      'completedAt'
+    )
 
     const document = makeDocument({ savedTreatments: [treatment] })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.savedTreatments[0].updatedAt).toBe('2025-03-09')
 
@@ -149,7 +189,7 @@ describe('migrateCloudSyncDocumentShape - saved treatment updatedAt backfill', (
 
     const document = makeDocument({ savedTreatments: [treatment] })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.savedTreatments[0].updatedAt).toBe('2025-04-01T00:00:00.000Z')
 
@@ -157,12 +197,16 @@ describe('migrateCloudSyncDocumentShape - saved treatment updatedAt backfill', (
 
   it('leaves a treatment untouched (no fabricated updatedAt) when completedAt and date are ALSO missing, so validation still correctly rejects it', () => {
 
-    const { updatedAt: _drop, completedAt: _drop2, date: _drop3, ...treatment } =
-      makeTreatment()
+    const treatment = omit(
+      makeTreatment(),
+      'updatedAt',
+      'completedAt',
+      'date'
+    )
 
     const document = makeDocument({ savedTreatments: [treatment] })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.savedTreatments[0].updatedAt).toBeUndefined()
 
@@ -177,14 +221,14 @@ describe('migrateCloudSyncDocumentShape - procedure updatedAt backfill (Phase 5.
 
   it('backfills a missing updatedAt from the document\'s own top-level updatedAt, and the migrated document then passes strict validation', () => {
 
-    const { updatedAt: _drop, ...procedureWithoutUpdatedAt } = makeProcedure()
+    const procedureWithoutUpdatedAt = omit(makeProcedure(), 'updatedAt')
 
     const document = makeDocument({
       updatedAt: '2026-07-01T00:00:00.000Z',
       customProcedures: [procedureWithoutUpdatedAt],
     })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.customProcedures[0].updatedAt).toBe('2026-07-01T00:00:00.000Z')
 
@@ -195,15 +239,15 @@ describe('migrateCloudSyncDocumentShape - procedure updatedAt backfill (Phase 5.
 
   it('backfills every procedure missing updatedAt with the same document-level timestamp', () => {
 
-    const { updatedAt: _drop, ...procA } = makeProcedure({ id: 'proc-a' })
-    const { updatedAt: _drop2, ...procB } = makeProcedure({ id: 'proc-b' })
+    const procA = omit(makeProcedure({ id: 'proc-a' }), 'updatedAt')
+    const procB = omit(makeProcedure({ id: 'proc-b' }), 'updatedAt')
 
     const document = makeDocument({
       updatedAt: '2026-07-01T00:00:00.000Z',
       customProcedures: [procA, procB],
     })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.customProcedures[0].updatedAt).toBe('2026-07-01T00:00:00.000Z')
     expect(migrated.customProcedures[1].updatedAt).toBe('2026-07-01T00:00:00.000Z')
@@ -219,7 +263,7 @@ describe('migrateCloudSyncDocumentShape - procedure updatedAt backfill (Phase 5.
       customProcedures: [procedure],
     })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.customProcedures[0].updatedAt).toBe('2025-04-01T00:00:00.000Z')
 
@@ -227,14 +271,14 @@ describe('migrateCloudSyncDocumentShape - procedure updatedAt backfill (Phase 5.
 
   it('leaves a procedure untouched (no fabricated updatedAt) when the document-level updatedAt is ALSO missing/invalid, so validation still correctly rejects it', () => {
 
-    const { updatedAt: _drop, ...procedureWithoutUpdatedAt } = makeProcedure()
+    const procedureWithoutUpdatedAt = omit(makeProcedure(), 'updatedAt')
 
     const document = makeDocument({
       updatedAt: '',
       customProcedures: [procedureWithoutUpdatedAt],
     })
 
-    const migrated = migrateCloudSyncDocumentShape(document) as any
+    const migrated = migrateCloudSyncDocumentShape(document) as MigratedDocument
 
     expect(migrated.customProcedures[0].updatedAt).toBeUndefined()
 

@@ -1,6 +1,12 @@
 import { getAccessToken } from './auth'
 import { validateCloudSyncDocument, type CloudSyncDocument } from './cloudSync'
 import { migrateCloudSyncDocumentShape } from './cloudSyncSchemaMigration'
+import {
+  diagnoseCloudSyncDocumentFailure,
+  diagnoseUnparsableCloudSyncContent,
+  type CloudSyncCorruptionDiagnosis,
+} from './cloudSyncCorruptionDiagnosis'
+import { captureCloudCorruptionDiagnostics } from './cloudCorruptionDiagnostics'
 
 /*
   CLOUD STORAGE (Microsoft Graph OneDrive App Folder)
@@ -298,8 +304,24 @@ export type CloudSyncTransportFailure =
 export type CloudSyncReadResult =
   | { status: 'not-found' }
   | { status: 'found'; document: CloudSyncDocument; eTag: string }
-  | { status: 'malformed-json'; detail: string }
-  | { status: 'invalid-document'; detail: string }
+  | {
+      status: 'malformed-json'
+      detail: string
+      /*
+        Optional (not required) so every existing mocked
+        CloudSyncReadResult literal across this project's own test
+        suite - constructed before this diagnosis feature existed -
+        keeps compiling unchanged. The real readCloudSyncDocument()
+        below always sets it; only a hand-built test mock can leave
+        it out.
+      */
+      diagnosis?: CloudSyncCorruptionDiagnosis
+    }
+  | {
+      status: 'invalid-document'
+      detail: string
+      diagnosis?: CloudSyncCorruptionDiagnosis
+    }
   | CloudSyncTransportFailure
 
 export type CloudSyncWriteResult =
@@ -450,17 +472,45 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
     )
   }
 
+  /*
+    Read as text FIRST, then JSON.parse() it separately (rather than
+    the single-step Response.json() used elsewhere in this file) - a
+    Response body can only be consumed once, so this is what lets the
+    exact raw bytes downloaded from OneDrive still be captured below
+    (captureCloudCorruptionDiagnostics()) even when they turn out not
+    to be valid JSON at all, not just when they parse but fail
+    validateCloudSyncDocument().
+  */
+  let rawContent: string
+
+  try {
+
+    rawContent = await contentResponse.text()
+
+  } catch (error) {
+    return { status: 'network-unreachable', detail: describeNetworkFailure(error) }
+  }
+
   let parsedContent: unknown
 
   try {
 
-    parsedContent = await contentResponse.json()
+    parsedContent = JSON.parse(rawContent)
 
   } catch {
 
+    const detail = `${CLOUD_SYNC_FILE_NAME} was downloaded but could not be parsed as JSON.`
+
+    captureCloudCorruptionDiagnostics({
+      rawContent,
+      error: detail,
+      capturedAt: new Date().toISOString(),
+    })
+
     return {
       status: 'malformed-json',
-      detail: `${CLOUD_SYNC_FILE_NAME} was downloaded but could not be parsed as JSON.`,
+      detail,
+      diagnosis: diagnoseUnparsableCloudSyncContent(),
     }
 
   }
@@ -485,7 +535,26 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
   const validation = validateCloudSyncDocument(migratedContent)
 
   if (!validation.valid) {
-    return { status: 'invalid-document', detail: validation.error }
+
+    captureCloudCorruptionDiagnostics({
+      rawContent,
+      error: validation.error,
+      capturedAt: new Date().toISOString(),
+    })
+
+    return {
+      status: 'invalid-document',
+      detail: validation.error,
+      /*
+        Diagnosed against the MIGRATED content, not the raw parsed
+        content - migrateCloudSyncDocumentShape() already backfilled
+        any known-missing field from an older schema version above,
+        so this reflects the actual reason validateCloudSyncDocument()
+        just rejected it, not a stale pre-migration shape.
+      */
+      diagnosis: diagnoseCloudSyncDocumentFailure(migratedContent),
+    }
+
   }
 
   return { status: 'found', document: validation.document, eTag }

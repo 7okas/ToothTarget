@@ -36,7 +36,6 @@ import {
 import {
   syncCloudNow,
   reconcileSyncedAccount,
-  __resetAccountSyncGuardForTests,
 } from './cloudSyncEngine'
 
 import { readPersistedPatientNumberConflicts } from './patientNumberConflicts'
@@ -661,6 +660,108 @@ describe('syncCloudNow - failure safety', () => {
     expect(
       readKey<Patient[]>('toothTargetPatients').map(p => p.id)
     ).toEqual(['a'])
+
+  })
+
+  /*
+    PRE-MERGE CORRUPTION GATE - a corrupt/unreadable live cloud file
+    must never reach mergeCloudSyncDocuments() or any local write, for
+    EITHER way readCloudSyncDocument() can report corruption
+    ('malformed-json' - not even parseable - and 'invalid-document' -
+    parses fine but fails schema validation). The single existing test
+    above already covers 'malformed-json'; this covers 'invalid-document'
+    with a richer local dataset (patients, treatments, templates,
+    procedures, tombstones all seeded) so a partial/silent merge into
+    any ONE of those five keys would be caught, not just patients.
+  */
+  it('a structurally invalid (but parseable) cloud document is rejected before merge - no local key is touched, cloud is never written', async () => {
+
+    const localPatients = [makePatient({ id: 'a' })]
+    const localTreatments = [makeSavedTreatment({ id: 't1' })]
+    const localTemplates = [makeBuiltinTemplate(), makeTemplate({ id: 'tmpl-1' })]
+    const localProcedures = [makeProcedure({ id: 'proc-1' })]
+    const localTombstones = [makeTombstone({ id: 'tomb-1' })]
+
+    seedLocalSynchronizedData({
+      patients: localPatients,
+      savedTreatments: localTreatments,
+      templates: localTemplates,
+      procedures: localProcedures,
+      tombstones: localTombstones,
+    })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'invalid-document',
+      detail: 'The cloud sync document contains invalid patient records.',
+    })
+
+    const result = await syncCloudNow()
+
+    expect(result.status).toBe('cloud-invalid')
+    expect(mockedWrite).not.toHaveBeenCalled()
+
+    // Every synchronized local key is byte-for-byte untouched - the
+    // gate fired before mergeCloudSyncDocuments() or commitLocalState()
+    // ever ran.
+    expect(readKey<Patient[]>('toothTargetPatients')).toEqual(localPatients)
+    expect(
+      readKey<SavedTreatment[]>('toothTargetSavedTreatments')
+    ).toEqual(localTreatments)
+    expect(readKey<ProcedureTemplate[]>('toothTargetTemplates')).toEqual(
+      localTemplates
+    )
+    expect(readKey<Procedure[]>('toothTargetProcedures')).toEqual(
+      localProcedures
+    )
+    expect(
+      readKey<DeletionTombstone[]>('toothTargetDeletionTombstones')
+    ).toEqual(localTombstones)
+
+  })
+
+  it('forwards readCloudSyncDocument()\'s own diagnosis through to the cloud-invalid result, for both malformed-json and invalid-document', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+
+    const unreadableDiagnosis = {
+      kind: 'unreadable' as const,
+      reason: 'The cloud file could not be parsed as JSON.',
+    }
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'malformed-json',
+      detail: 'not json',
+      diagnosis: unreadableDiagnosis,
+    })
+
+    const malformedResult = await syncCloudNow()
+
+    expect(malformedResult).toEqual({
+      status: 'cloud-invalid',
+      detail: 'not json',
+      diagnosis: unreadableDiagnosis,
+    })
+
+    const invalidRecordDiagnosis = {
+      kind: 'invalid-record' as const,
+      recordType: 'patient' as const,
+      recordDescription: 'Patient "Jane Doe" (id abc)',
+      reason: 'is missing a name',
+    }
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'invalid-document',
+      detail: 'The cloud sync document contains invalid patient records.',
+      diagnosis: invalidRecordDiagnosis,
+    })
+
+    const invalidDocumentResult = await syncCloudNow()
+
+    expect(invalidDocumentResult).toEqual({
+      status: 'cloud-invalid',
+      detail: 'The cloud sync document contains invalid patient records.',
+      diagnosis: invalidRecordDiagnosis,
+    })
 
   })
 

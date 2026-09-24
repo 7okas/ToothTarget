@@ -78,9 +78,43 @@ export default function StartupGateScreen() {
   const [signInBusy, setSignInBusy] = useState(false)
   const [signInError, setSignInError] = useState<string | null>(null)
 
-  useEffect(() => {
+  /*
+    Adjusted directly during render (not inside a useEffect) - see
+    https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes.
+    `status` comes from an external store (useSyncExternalStore), and
+    reduceStartupGateState() needs to remember more than just the
+    latest status (see its own header comment: it tracks the
+    CURRENTLY-GATING attempt across calls, not a pure function of
+    status alone), so this can't simply be computed inline every
+    render - but calling the setter synchronously at a useEffect's own
+    top level (react-hooks/set-state-in-effect) causes an extra,
+    avoidable render pass. Guarding on `reducedStatus` (the last status
+    this component actually reduced) lets React fold the update into
+    the same render/commit instead. reduceStartupGateState() is
+    written to return the exact same object back when nothing
+    meaningfully changes (see its own tests) - a real bail-out target,
+    not just a value that happens to look equal.
+  */
+  const [reducedStatus, setReducedStatus] = useState(status)
+
+  if (status !== reducedStatus) {
+    setReducedStatus(status)
     setState(current => reduceStartupGateState(current, status))
-  }, [status])
+  }
+
+  /*
+    Same "adjust during render" reasoning as reducedStatus above -
+    `fading` must reset to false whenever the gating phase changes
+    (including a success-phase fade being interrupted by a fresh
+    gating attempt before its own pass timer fires), so a later
+    success re-entry never starts already faded.
+  */
+  const [phaseAtLastFadeReset, setPhaseAtLastFadeReset] = useState(state.phase)
+
+  if (state.phase !== phaseAtLastFadeReset) {
+    setPhaseAtLastFadeReset(state.phase)
+    setFading(false)
+  }
 
   /*
     Auto-proceed once a gating sync succeeds: same brief-checkmark-
@@ -89,11 +123,11 @@ export default function StartupGateScreen() {
     this is the ONE automatic transition this screen makes (Phase 6.5
     requirement 3), and it's deliberately restricted to the success
     phase only (a failed gating attempt never times out on its own -
-    see this file's header comment).
+    see this file's header comment). Only ever schedules/cancels the
+    fade+pass timers now - resetting `fading` itself happens above,
+    during render, not here.
   */
   useEffect(() => {
-
-    setFading(false)
 
     if (state.phase !== 'success') {
       return

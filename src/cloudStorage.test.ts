@@ -25,8 +25,48 @@ import {
   readCloudSyncDocument,
   writeCloudSyncDocument,
 } from './cloudStorage'
+import { readCloudCorruptionDiagnostics } from './cloudCorruptionDiagnostics'
 
 const mockedGetAccessToken = vi.mocked(getAccessToken)
+
+/*
+  Minimal in-memory Storage - same pattern used throughout this
+  project's own test suite (see cloudSyncEngine.test.ts's own comment).
+  Needed here only for the new corruption-diagnostics-capture tests
+  below - every other test in this file never touches localStorage at
+  all, which is exactly why captureCloudCorruptionDiagnostics() is
+  written to fail silently rather than throw when localStorage isn't
+  usable (see this file's other tests, none of which stub it).
+*/
+class MemoryStorage implements Storage {
+
+  private store = new Map<string, string>()
+
+  get length(): number {
+    return this.store.size
+  }
+
+  clear(): void {
+    this.store.clear()
+  }
+
+  getItem(key: string): string | null {
+    return this.store.has(key) ? this.store.get(key)! : null
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.store.keys())[index] ?? null
+  }
+
+  removeItem(key: string): void {
+    this.store.delete(key)
+  }
+
+  setItem(key: string, value: string): void {
+    this.store.set(key, value)
+  }
+
+}
 
 function makeDocument(
   overrides: Partial<CloudSyncDocument> = {}
@@ -63,6 +103,7 @@ beforeEach(() => {
   mockedGetAccessToken.mockReset()
   mockedGetAccessToken.mockResolvedValue('test-access-token')
   vi.stubGlobal('fetch', vi.fn())
+  globalThis.localStorage = new MemoryStorage()
 })
 
 afterEach(() => {
@@ -123,6 +164,32 @@ describe('readCloudSyncDocument', () => {
 
   })
 
+  it('classifies malformed JSON as an "unreadable" diagnosis (no specific record identified) and captures diagnostics', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(textResponse(200, '{ not valid json'))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('malformed-json')
+
+    if (result.status !== 'malformed-json') {
+      throw new Error('expected malformed-json')
+    }
+
+    expect(result.diagnosis?.kind).toBe('unreadable')
+
+    const diagnostics = readCloudCorruptionDiagnostics()
+
+    expect(diagnostics?.rawContent).toBe('{ not valid json')
+    expect(diagnostics?.error).toBe(result.detail)
+    expect(typeof diagnostics?.capturedAt).toBe('string')
+
+  })
+
   it('does not map an unsupported schema version to not-found', async () => {
 
     const fetchMock = vi.mocked(fetch)
@@ -145,6 +212,85 @@ describe('readCloudSyncDocument', () => {
 
     expect(result.status).toBe('invalid-document')
     expect(result.status).not.toBe('not-found')
+
+  })
+
+  it('classifies a document-shape rejection (unsupported schema version) as "unreadable", and captures diagnostics with the raw content', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    const legacyLookingDocument = {
+      schemaVersion: 1,
+      app: 'ToothTarget',
+      exportedAt: '2026-01-01T00:00:00.000Z',
+      patients: [],
+      savedTreatments: [],
+      customTemplates: [],
+      customProcedures: [],
+    }
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, legacyLookingDocument))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('invalid-document')
+
+    if (result.status !== 'invalid-document') {
+      throw new Error('expected invalid-document')
+    }
+
+    expect(result.diagnosis?.kind).toBe('unreadable')
+
+    const diagnostics = readCloudCorruptionDiagnostics()
+
+    expect(diagnostics?.rawContent).toBe(JSON.stringify(legacyLookingDocument))
+    expect(diagnostics?.error).toBe(result.detail)
+
+  })
+
+  it('classifies a single bad record (a patient missing its name) as "invalid-record", identifying that exact patient', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    const documentWithBadPatient = {
+      schemaVersion: CLOUD_SYNC_SCHEMA_VERSION,
+      app: CLOUD_SYNC_APP,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      patients: [
+        {
+          id: 'patient-broken',
+          patientNumber: 4,
+          name: '',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      savedTreatments: [],
+      customTemplates: [],
+      customProcedures: [],
+      deletionTombstones: [],
+    }
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, documentWithBadPatient))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('invalid-document')
+
+    if (result.status !== 'invalid-document') {
+      throw new Error('expected invalid-document')
+    }
+
+    expect(result.diagnosis?.kind).toBe('invalid-record')
+
+    if (result.diagnosis?.kind === 'invalid-record') {
+      expect(result.diagnosis.recordType).toBe('patient')
+      expect(result.diagnosis.recordDescription).toContain('patient-broken')
+    }
 
   })
 

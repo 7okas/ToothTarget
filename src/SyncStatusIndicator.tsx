@@ -8,9 +8,16 @@ import {
   requestCloudSync,
   type CloudSyncStatus,
 } from './cloudSyncScheduler'
-import { describeSyncOutcome, type SyncOutcomeReason } from './syncOutcome'
+import { describeSyncOutcome } from './syncOutcome'
 import { getDeviceLastSyncAt } from './deviceSyncTracking'
 import { formatRelativeTime } from './format'
+import {
+  reduceSyncIndicatorState,
+  canTriggerManualSync,
+  INITIAL_SYNC_INDICATOR_STATE,
+  type SyncIndicatorState,
+  type SyncIconState,
+} from './syncStatusIndicatorState'
 
 /*
   PERSISTENT SYNC STATUS INDICATOR
@@ -55,125 +62,19 @@ import { formatRelativeTime } from './format'
 */
 
 /*
-  DISPLAY DECISION (pure, no React/DOM - see SyncStatusIndicator.test.ts)
+  DISPLAY DECISION + MANUAL SYNC-ON-CLICK GUARD
 
-  A small reducer: (previous state, previous status, current status,
-  last known sync outcome) -> next state. Threading the previous state
-  through (rather than computing from `currentStatus` alone) is what
-  lets `hasCompletedOnce` latch permanently true the first time a sync
-  attempt resolves, and stay true for the rest of the session even as
-  `status` later cycles back through 'pending'/'syncing' for a later
-  attempt - the icon must never regress to "nothing shown" just because
-  a retry started.
-
-  icon is a plain function of (currentStatus, hasCompletedOnce, the
-  outcome's own needsAttention flag):
-    - 'pending'/'syncing' -> 'spinner', unconditionally - a spinner
-      claims nothing about any past outcome, so it doesn't need one.
-    - before any attempt has ever completed this session -> no icon yet
-      (there's nothing to report).
-    - once at least one attempt has completed, and the most recent
-      outcome needs attention (regardless of whether the coarse status
-      is 'idle' or 'unavailable' - eg. a successful sync that still
-      left an unresolved patient-number conflict) -> 'attention'.
-    - otherwise, 'idle' -> 'success', 'unavailable' -> 'failure'.
-  This alone satisfies "success/attention/failure icon persists
-  indefinitely, and only flips on an actual subsequent status
-  transition" - between one outcome and the next, any retries only ever
-  pass back through the unconditional 'spinner' case; the icon only
-  ever changes when a `currentStatus` transition is actually reached
-  again, never merely because a new attempt started.
-
-  text is keyed off the TRANSITION (previousStatus was 'pending'/
-  'syncing', current status just resolved), same reasoning as before
-  this phase: 'idle' or 'unavailable' reached any other way (the
-  long-settled case, or a failure just sitting there from before) must
-  not re-show text that was already shown and has since been
-  dismissed/faded. autoHide is now driven by needsAttention rather than
-  being fixed per coarse status - an outcome the app will resolve on
-  its own (offline, a transient OneDrive error, a self-resolved sync
-  conflict) fades exactly like a plain "Synced" message; one that
-  genuinely needs the dentist's attention (expired sign-in, corrupted
-  cloud data, an unresolved patient-number conflict) stays visible
-  until the next sync attempt changes it, the same persistence "Sync
-  error" always had.
+  reduceSyncIndicatorState()/canTriggerManualSync() (and the
+  SyncIconState/SyncTextState/SyncIndicatorState types and
+  INITIAL_SYNC_INDICATOR_STATE they use) now live in
+  syncStatusIndicatorState.ts, not here - a pure, no-React/DOM module
+  this component imports from, same as syncOutcome.ts/startupGate.ts's
+  own extraction. This file exporting only its default component (and
+  no plain functions/constants alongside it) is what lets Vite's Fast
+  Refresh reliably hot-reload it; see that module's own header comment
+  for the full reasoning and for reduceSyncIndicatorState()'s own
+  documented behavior.
 */
-
-export type SyncIconState = 'spinner' | 'success' | 'attention' | 'failure' | null
-
-export type SyncTextState =
-  | { label: string; autoHide: boolean }
-  | null
-
-export type SyncIndicatorState = {
-  icon: SyncIconState
-  text: SyncTextState
-  hasCompletedOnce: boolean
-}
-
-export const INITIAL_SYNC_INDICATOR_STATE: SyncIndicatorState = {
-  icon: null,
-  text: null,
-  hasCompletedOnce: false,
-}
-
-export function reduceSyncIndicatorState(
-  previous: SyncIndicatorState,
-  previousStatus: CloudSyncStatus,
-  currentStatus: CloudSyncStatus,
-  outcome: SyncOutcomeReason | null
-): SyncIndicatorState {
-
-  if (currentStatus === 'syncing' || currentStatus === 'pending') {
-    return {
-      hasCompletedOnce: previous.hasCompletedOnce,
-      icon: 'spinner',
-      text: { label: 'Syncing…', autoHide: false },
-    }
-  }
-
-  const justFinished =
-    previousStatus === 'syncing' || previousStatus === 'pending'
-
-  const hasCompletedOnce = previous.hasCompletedOnce || justFinished
-
-  const copy = outcome ? describeSyncOutcome(outcome) : null
-
-  const icon: SyncIconState =
-    !hasCompletedOnce
-      ? null
-      : copy?.needsAttention
-        ? 'attention'
-        : currentStatus === 'idle'
-          ? 'success'
-          : 'failure'
-
-  return {
-    hasCompletedOnce,
-    icon,
-    text:
-      justFinished && copy
-        ? { label: copy.label, autoHide: !copy.needsAttention }
-        : null,
-  }
-
-}
-
-/*
-  MANUAL SYNC-ON-CLICK GUARD (Phase 8)
-
-  Pure, same reasoning as reduceSyncIndicatorState() above - kept
-  testable without a React rendering harness (see this file's own
-  test file). The clickable badge only ever renders while the icon
-  shows 'success' (see the render below), which itself already
-  implies currentStatus === 'idle' - but this re-checks the live
-  status directly rather than trusting that derived icon state, so a
-  tap can never queue a duplicate/conflicting sync on top of one
-  already running or about to run.
-*/
-export function canTriggerManualSync(status: CloudSyncStatus): boolean {
-  return status !== 'syncing' && status !== 'pending'
-}
 
 const AUTO_HIDE_MS = 10000
 const FADE_MS = 400
@@ -261,14 +162,31 @@ export default function SyncStatusIndicator() {
   }, [status, outcome])
 
   /*
-    Only the TEXT auto-hides (and only when autoHide is true - see this
-    file's own DISPLAY DECISION comment for which outcomes that is) -
-    the icon itself is never touched here and is left exactly as the
-    reducer above set it, so it keeps persisting after the text fades.
-  */
-  useEffect(() => {
+    Only the TEXT auto-hides (and only when autoHide is true - see
+    syncStatusIndicatorState.ts's own DISPLAY DECISION comment for
+    which outcomes that is) - the icon itself is never touched here
+    and is left exactly as the reducer set it, so it keeps persisting
+    after the text fades.
 
+    Resetting `fading` back to false whenever state.text actually
+    changes is done directly during render just below (not inside the
+    effect) - see https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes.
+    Calling a state setter synchronously at an effect's own top level
+    triggers an extra, avoidable render pass (react-hooks/
+    set-state-in-effect); doing it in the render body instead, guarded
+    by a comparison against the last text this reset for, lets React
+    fold the correction into the same render/commit rather than
+    scheduling a second one. The effect below keeps only the genuine
+    side effect - scheduling/cancelling the fade and clear timers.
+  */
+  const [textAtLastFadeReset, setTextAtLastFadeReset] = useState(state.text)
+
+  if (state.text !== textAtLastFadeReset) {
+    setTextAtLastFadeReset(state.text)
     setFading(false)
+  }
+
+  useEffect(() => {
 
     if (!state.text || !state.text.autoHide) {
       return

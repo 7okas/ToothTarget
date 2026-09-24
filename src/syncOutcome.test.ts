@@ -136,6 +136,42 @@ describe('classifySyncOutcome - every CloudSyncResult status maps to its own dis
 
   })
 
+  it('cloud-invalid carries its diagnosis (if any) through to the outcome, for the corruption-recovery dialog to read', () => {
+
+    const diagnosis = {
+      kind: 'invalid-record' as const,
+      recordType: 'patient' as const,
+      recordDescription: 'Patient "Jane Doe" (id abc)',
+      reason: 'is missing a name',
+    }
+
+    const result: CloudSyncResult = {
+      status: 'cloud-invalid',
+      detail: 'The cloud sync document contains invalid patient records.',
+      diagnosis,
+    }
+
+    expect(classifySyncOutcome(result)).toEqual({
+      type: 'cloud-data-corrupted',
+      diagnosis,
+    })
+
+  })
+
+  it('cloud-invalid with no diagnosis at all still classifies cleanly (diagnosis is optional)', () => {
+
+    const result: CloudSyncResult = {
+      status: 'cloud-invalid',
+      detail: 'not valid json',
+    }
+
+    const outcome = classifySyncOutcome(result)
+
+    expect(outcome.type).toBe('cloud-data-corrupted')
+    expect(outcome.diagnosis).toBeUndefined()
+
+  })
+
   it('validation-failed (this device\'s own local data): "local-data-invalid", needs attention', () => {
 
     const result: CloudSyncResult = {

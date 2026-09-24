@@ -13,7 +13,7 @@ import {
 } from './cloudSyncScheduler'
 import { reconcileSyncedAccount, syncCloudNow } from './cloudSyncEngine'
 import { signOutWithBestEffortSync } from './cloudSyncSignOut'
-import { canTriggerManualSync } from './SyncStatusIndicator'
+import { canTriggerManualSync } from './syncStatusIndicatorState'
 
 /*
   Plain, non-technical copy only - never a raw Graph/ETag error (those

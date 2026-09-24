@@ -1,4 +1,5 @@
 import type { CloudSyncResult } from './cloudSyncEngine'
+import type { CloudSyncCorruptionDiagnosis } from './cloudSyncCorruptionDiagnosis'
 
 /*
   SYNC OUTCOME CLASSIFICATION (Phase 6)
@@ -41,6 +42,17 @@ export type SyncOutcomeType =
 
 export type SyncOutcomeReason = {
   type: SyncOutcomeType
+  /*
+    Only ever set when type === 'cloud-data-corrupted' - kept optional
+    (rather than a discriminated union keyed on type) so every
+    existing `{ type: someType }` SyncOutcomeReason literal already
+    written across this project's own test suite (SyncStatusIndicator.test.ts,
+    syncOutcome.test.ts, etc.) keeps compiling unchanged.
+    CloudCorruptionRecoveryDialog.tsx is the one real consumer that
+    reads it, to explain WHY the cloud file was rejected, not just
+    THAT it was.
+  */
+  diagnosis?: CloudSyncCorruptionDiagnosis
 }
 
 /*
@@ -78,7 +90,7 @@ export function classifySyncOutcome(
       return { type: 'sync-busy' }
 
     case 'cloud-invalid':
-      return { type: 'cloud-data-corrupted' }
+      return { type: 'cloud-data-corrupted', diagnosis: result.diagnosis }
 
     case 'validation-failed':
       return { type: 'local-data-invalid' }

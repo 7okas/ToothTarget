@@ -1,18 +1,17 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 /*
   Only reduceSyncIndicatorState() - the pure decision function - is
   tested here, not the component itself. This project has no
-  React-rendering test harness (no jsdom/testing-library dependency;
-  see cloudSyncEngine.ts's/cloudStorage.test.ts's own comments on why
-  auth.ts in particular can't load under Vitest's default 'node'
-  environment), so the meaningful, non-trivial logic - "given the
-  previous indicator state, the previous/current scheduler status, and
-  the most recently classified sync outcome, what should the indicator
-  show now" - is kept as a plain reducer specifically so it can be
-  tested without one. The actual wiring (useSyncExternalStore, the 10s
-  auto-hide timer for the TEXT only, the signed-out "Sign in needed"
-  branch) is thin glue over this and is not covered here.
+  React-rendering test harness (no jsdom/testing-library dependency),
+  so the meaningful, non-trivial logic - "given the previous indicator
+  state, the previous/current scheduler status, and the most recently
+  classified sync outcome, what should the indicator show now" - is
+  kept as a plain reducer specifically so it can be tested without
+  one. The actual wiring (useSyncExternalStore, the 10s auto-hide
+  timer for the TEXT only, the signed-out "Sign in needed" branch) is
+  thin glue over this, lives in SyncStatusIndicator.tsx itself, and is
+  not covered here.
 
   Phase 6 note: these tests deliberately assert against
   describeSyncOutcome(outcome).label/needsAttention rather than
@@ -21,35 +20,19 @@ import { describe, expect, it, vi } from 'vitest'
   reduceSyncIndicatorState() wires that wording/needsAttention flag
   into the right icon/autoHide/persistence behavior.
 
-  SyncStatusIndicator.tsx still imports the real auth.ts/
-  cloudSyncScheduler.ts at the top of the file (for its default
-  component export), so importing it here at all - even just to reach
-  reduceSyncIndicatorState() - needs the same vi.mock('./auth', ...)
-  used by cloudStorage.test.ts/cloudSyncOnlineRetry.test.ts, for the
-  same reason: the real auth.ts instantiates MSAL (via authConfig.ts,
-  which touches `window.location`) at module load time, crashing
-  under Vitest's default 'node' environment.
+  Imported from syncStatusIndicatorState.ts, not SyncStatusIndicator.tsx
+  itself - that extraction (so the component file only ever exports
+  its default component, for Fast Refresh) also means this file no
+  longer needs to mock auth.ts/cloudSyncScheduler.ts at all: the pure
+  module has no runtime dependency on either.
 */
-
-vi.mock('./auth', () => ({
-  getActiveAccount: vi.fn(),
-  subscribeToActiveAccount: vi.fn(),
-}))
-
-vi.mock('./cloudSyncScheduler', () => ({
-  getCloudSyncStatus: vi.fn(),
-  subscribeCloudSyncStatus: vi.fn(),
-  getLastSyncOutcome: vi.fn(),
-  subscribeLastSyncOutcome: vi.fn(),
-  requestCloudSync: vi.fn(),
-}))
 
 import {
   reduceSyncIndicatorState,
   canTriggerManualSync,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
-} from './SyncStatusIndicator'
+} from './syncStatusIndicatorState'
 
 import {
   describeSyncOutcome,

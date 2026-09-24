@@ -24,6 +24,7 @@ import { createCloudBackup, type CloudBackup } from './cloudBackup'
 import {
   isCorruptedSyncOutcome,
   findNewestValidBackup,
+  checkAllBackupSlots,
 } from './cloudCorruptionRecovery'
 import type { SyncOutcomeReason, SyncOutcomeType } from './syncOutcome'
 
@@ -201,6 +202,128 @@ describe('findNewestValidBackup - picks the newest VALID backup among A/B/C', ()
     const result = await findNewestValidBackup()
 
     expect(result?.backup).toEqual(realSnapshot)
+
+  })
+
+})
+
+describe('checkAllBackupSlots - reports pass/fail + date for ALL THREE slots, not just the newest valid one', () => {
+
+  it('reports "missing" for every slot when no dated backup file exists at all', async () => {
+
+    mockedListFiles.mockResolvedValueOnce([
+      'toothtarget-sync.json',
+    ])
+
+    const result = await checkAllBackupSlots()
+
+    expect(result).toEqual([
+      { slot: 'A', status: 'missing' },
+      { slot: 'B', status: 'missing' },
+      { slot: 'C', status: 'missing' },
+    ])
+
+  })
+
+  it('reports each of A/B/C independently - valid, invalid, and missing all at once', async () => {
+
+    mockedListFiles.mockResolvedValueOnce([
+      'toothtarget-backup-A-2026-09-20.json',
+      'toothtarget-backup-B-2026-09-22.json',
+      // C deliberately absent
+    ])
+
+    mockedReadData.mockImplementation(async (fileName: string) => {
+
+      if (fileName === 'toothtarget-backup-A-2026-09-20.json') {
+        return makeBackup('2026-09-20T08:00:00.000Z')
+      }
+
+      if (fileName === 'toothtarget-backup-B-2026-09-22.json') {
+        return { not: 'a backup' }
+      }
+
+      throw new Error('unexpected file name: ' + fileName)
+
+    })
+
+    const result = await checkAllBackupSlots()
+
+    expect(result).toEqual([
+      {
+        slot: 'A',
+        status: 'valid',
+        date: '2026-09-20',
+        fileName: 'toothtarget-backup-A-2026-09-20.json',
+      },
+      {
+        slot: 'B',
+        status: 'invalid',
+        date: '2026-09-22',
+        fileName: 'toothtarget-backup-B-2026-09-22.json',
+        error: expect.any(String),
+      },
+      { slot: 'C', status: 'missing' },
+    ])
+
+  })
+
+  it('reports "unreadable" (with the underlying error) for a slot that throws while being read', async () => {
+
+    mockedListFiles.mockResolvedValueOnce([
+      'toothtarget-backup-A-2026-09-24.json',
+    ])
+
+    mockedReadData.mockRejectedValueOnce(new Error('network blip'))
+
+    const result = await checkAllBackupSlots()
+
+    expect(result).toEqual([
+      {
+        slot: 'A',
+        status: 'unreadable',
+        date: '2026-09-24',
+        fileName: 'toothtarget-backup-A-2026-09-24.json',
+        error: 'network blip',
+      },
+      { slot: 'B', status: 'missing' },
+      { slot: 'C', status: 'missing' },
+    ])
+
+  })
+
+  it('a slot whose newer valid twin exists does not hide an invalid other slot - all three are always reported', async () => {
+
+    mockedListFiles.mockResolvedValueOnce([
+      'toothtarget-backup-A-2026-09-10.json',
+      'toothtarget-backup-B-2026-09-24.json',
+      'toothtarget-backup-C-2026-09-18.json',
+    ])
+
+    mockedReadData.mockImplementation(async (fileName: string) => {
+
+      if (fileName === 'toothtarget-backup-B-2026-09-24.json') {
+        // Newest, and INVALID - findNewestValidBackup() would skip
+        // straight past this to C, but checkAllBackupSlots() must
+        // still report it explicitly rather than hiding it.
+        return { not: 'a backup' }
+      }
+
+      return makeBackup('2026-01-01T00:00:00.000Z')
+
+    })
+
+    const result = await checkAllBackupSlots()
+
+    const bSlot = result.find(entry => entry.slot === 'B')
+
+    expect(bSlot?.status).toBe('invalid')
+
+    const aSlot = result.find(entry => entry.slot === 'A')
+    const cSlot = result.find(entry => entry.slot === 'C')
+
+    expect(aSlot?.status).toBe('valid')
+    expect(cSlot?.status).toBe('valid')
 
   })
 

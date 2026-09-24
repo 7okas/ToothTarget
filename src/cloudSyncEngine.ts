@@ -19,6 +19,8 @@ import {
   type CloudSyncTransportFailure,
 } from './cloudStorage'
 
+import type { CloudSyncCorruptionDiagnosis } from './cloudSyncCorruptionDiagnosis'
+
 import { recordAndReconcilePatientNumberConflicts } from './patientNumberConflicts'
 
 import {
@@ -403,7 +405,19 @@ export type CloudSyncResult =
   | { status: 'stale-review-required'; candidates: StaleReviewCandidate[] }
   | { status: 'cloud-committed-locally-pending'; detail: string }
   | { status: 'contention'; attempts: number }
-  | { status: 'cloud-invalid'; detail: string }
+  | {
+      status: 'cloud-invalid'
+      detail: string
+      /*
+        Optional for the same reason CloudSyncReadResult's own
+        diagnosis field is (see cloudStorage.ts) - every existing
+        mocked CloudSyncResult literal in this project's test suite,
+        written before this diagnosis feature existed, keeps
+        compiling unchanged. performSync() below always forwards
+        whatever readCloudSyncDocument() gave it.
+      */
+      diagnosis?: CloudSyncCorruptionDiagnosis
+    }
   | { status: 'validation-failed'; detail: string }
   | CloudSyncTransportFailure
 
@@ -471,9 +485,27 @@ async function performSync(
         expectedETag = cloudRead.eTag
         break
 
+      /*
+        PRE-MERGE CORRUPTION GATE
+
+        A corrupt/unreadable live cloud file is rejected right here,
+        as soon as readCloudSyncDocument() reports it - before
+        mergeCloudSyncDocuments() is ever called (that call is further
+        down this same loop body) and before ANY local write happens.
+        This has always been true of this switch (readCloudSyncDocument()
+        already classified both statuses before this document existed);
+        this comment only makes that existing behavior explicit, and
+        the diagnosis it now carries is what lets the corruption-
+        recovery dialog explain WHY, not just THAT, the cloud file was
+        rejected.
+      */
       case 'malformed-json':
       case 'invalid-document':
-        return { status: 'cloud-invalid', detail: cloudRead.detail }
+        return {
+          status: 'cloud-invalid',
+          detail: cloudRead.detail,
+          diagnosis: cloudRead.diagnosis,
+        }
 
       case 'auth-failed':
         return { status: 'auth-failed' }

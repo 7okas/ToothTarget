@@ -3,6 +3,8 @@ import { validateCloudBackup, type CloudBackup } from './cloudBackup'
 import { listAppFolderFileNames, readCloudData } from './cloudStorage'
 import {
   parseBackupFileName,
+  groupBackupFilesBySlot,
+  type BackupSlot,
   type BackupSlotFile,
 } from './cloudBackupRotation'
 
@@ -23,9 +25,16 @@ import {
   way any other local change would.
 */
 
+/*
+  A type predicate (not just a boolean check) so a caller that has
+  already called this - eg. CloudCorruptionRecoveryDialog.tsx's own
+  early return - gets outcome narrowed to a SyncOutcomeReason that
+  TypeScript knows is the corrupted one, letting it read
+  outcome.diagnosis afterward without a redundant second check.
+*/
 export function isCorruptedSyncOutcome(
   outcome: SyncOutcomeReason | null
-): boolean {
+): outcome is SyncOutcomeReason & { type: 'cloud-data-corrupted' } {
   return outcome?.type === 'cloud-data-corrupted'
 }
 
@@ -84,5 +93,89 @@ export async function findNewestValidBackup(): Promise<NewestValidBackup | null>
   }
 
   return null
+
+}
+
+/*
+  ALL-THREE-SLOTS BACKUP VALIDITY REPORT
+
+  Unlike findNewestValidBackup() above (which only cares about
+  finding ONE usable backup to offer a restore from, and silently
+  skips anything invalid along the way), this reports pass/fail + date
+  for EVERY slot (A, B, C) - including a slot that's currently empty,
+  invalid, or unreadable - so the corruption-recovery dialog can show
+  the dentist the full picture of what's available, not just "here is
+  the best one". Reuses the same validateCloudBackup() and
+  groupBackupFilesBySlot() the rest of this backup system already
+  relies on - no new validation rules, only a new report shape.
+*/
+
+export type BackupSlotValidity =
+  | { slot: BackupSlot; status: 'missing' }
+  | { slot: BackupSlot; status: 'valid'; date: string; fileName: string }
+  | { slot: BackupSlot; status: 'invalid'; date: string; fileName: string; error: string }
+  | { slot: BackupSlot; status: 'unreadable'; date: string; fileName: string; error: string }
+
+const SLOTS: BackupSlot[] = ['A', 'B', 'C']
+
+export async function checkAllBackupSlots(): Promise<BackupSlotValidity[]> {
+
+  const fileNames = await listAppFolderFileNames()
+
+  const files = fileNames
+    .map(parseBackupFileName)
+    .filter((file): file is BackupSlotFile => file !== null)
+
+  const grouped = groupBackupFilesBySlot(files)
+
+  const results: BackupSlotValidity[] = []
+
+  for (const slot of SLOTS) {
+
+    const file = grouped[slot]
+
+    if (!file) {
+      results.push({ slot, status: 'missing' })
+      continue
+    }
+
+    try {
+
+      const data = await readCloudData<unknown>(file.fileName)
+
+      if (data === null) {
+        results.push({ slot, status: 'missing' })
+        continue
+      }
+
+      const validation = validateCloudBackup(data)
+
+      results.push(
+        validation.valid
+          ? { slot, status: 'valid', date: file.date, fileName: file.fileName }
+          : {
+              slot,
+              status: 'invalid',
+              date: file.date,
+              fileName: file.fileName,
+              error: validation.error,
+            }
+      )
+
+    } catch (error) {
+
+      results.push({
+        slot,
+        status: 'unreadable',
+        date: file.date,
+        fileName: file.fileName,
+        error: error instanceof Error ? error.message : String(error),
+      })
+
+    }
+
+  }
+
+  return results
 
 }
