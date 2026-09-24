@@ -6,7 +6,6 @@ import {
   signOut,
   subscribeToActiveAccount,
 } from './auth'
-import { testCloudStorage, type CloudStorageTestResult } from './graphTest'
 import { readCloudData, writeCloudData } from './cloudStorage'
 import {
   createCloudBackup,
@@ -29,6 +28,14 @@ import { formatDate } from './format'
   logging). This is a read-only reflection of automatic background
   sync (Phase 7) - it has no buttons and cannot itself start, stop, or
   retry anything.
+
+  Phase 6 deliberately leaves this coarse 4-value mapping as-is: the
+  persistent top-right badge (SyncStatusIndicator.tsx) is where a
+  failure now gets its own specific, plain-language reason (see
+  syncOutcome.ts) - this simpler status line on the Settings screen
+  stays a one-line summary of whether a sync is in progress, pending,
+  or not currently succeeding, which "Cloud sync unavailable" already
+  honestly says without needing to enumerate every reason why.
 */
 const CLOUD_SYNC_STATUS_LABEL: Record<
   ReturnType<typeof getCloudSyncStatus>,
@@ -45,11 +52,10 @@ const CLOUD_SYNC_STATUS_LABEL: Record<
 
   Self-contained - it owns its own sign-in/sign-out/loading/error
   state and reads/writes nothing in App.tsx's state or localStorage
-  keys. Dropping it into (or removing it from) the Settings screen
-  never touches any existing patient/treatment/template behavior.
-  Signing in only makes a Microsoft account available for a later,
-  separate feature - it does not yet read or write anything on
-  OneDrive.
+  keys directly. Signing in here is what makes automatic, multi-device
+  cloud sync active (see cloudSyncEngine.ts/cloudSyncScheduler.ts) and
+  enables the manual "Backup to Cloud"/"Load from Cloud" actions below
+  - both are real, in-production OneDrive features, not previews.
 
   Reuses the existing settings-section-title / settings-section-
   description / settings-actions / settings-error-message classes
@@ -130,19 +136,6 @@ export default function MicrosoftAccountSection() {
 
   const [cloudRestoreBusy, setCloudRestoreBusy] =
     useState(false)
-
-  /*
-    TEMPORARY - Microsoft Graph App Folder connectivity test. Isolated
-    to these two pieces of state, handleTestCloudStorage(), and the
-    one button/result block below - remove all three plus
-    graphTest.ts to take this back out later.
-  */
-
-  const [cloudTestBusy, setCloudTestBusy] =
-    useState(false)
-
-  const [cloudTestResult, setCloudTestResult] =
-    useState<CloudStorageTestResult | null>(null)
 
   useEffect(() => {
 
@@ -325,22 +318,6 @@ export default function MicrosoftAccountSection() {
 
   }
 
-  /*
-    TEMPORARY - see the state declarations above.
-  */
-
-  async function handleTestCloudStorage() {
-
-    setCloudTestResult(null)
-    setCloudTestBusy(true)
-
-    const result = await testCloudStorage()
-
-    setCloudTestBusy(false)
-    setCloudTestResult(result)
-
-  }
-
   return (
 
     <>
@@ -431,38 +408,6 @@ export default function MicrosoftAccountSection() {
             <p className="settings-error-message">
               {cloudLoadError}
             </p>
-          )}
-
-          {/*
-            TEMPORARY - Microsoft Graph App Folder connectivity test.
-            See graphTest.ts. Safe to delete this block (and that
-            file) once cloud sync is actually implemented.
-          */}
-
-          <div className="options-menu-list settings-actions">
-
-            <button
-              type="button"
-              onClick={handleTestCloudStorage}
-              disabled={cloudTestBusy}
-            >
-              {cloudTestBusy ? 'Testing Cloud Storage…' : 'Test Cloud Storage'}
-            </button>
-
-          </div>
-
-          {cloudTestResult && (
-
-            <p
-              className={
-                cloudTestResult.success
-                  ? 'settings-section-description privacy-lock-status'
-                  : 'settings-error-message'
-              }
-            >
-              {cloudTestResult.message}
-            </p>
-
           )}
 
         </>

@@ -9,6 +9,7 @@ import {
 
 import {
   mergeCloudSyncDocuments,
+  pruneExpiredTombstones,
   type PatientNumberConflict,
 } from './cloudMerge'
 
@@ -20,6 +21,16 @@ import {
 
 import { recordAndReconcilePatientNumberConflicts } from './patientNumberConflicts'
 
+import {
+  isDeviceSyncStale,
+  recordDeviceSyncSuccess,
+} from './deviceSyncTracking'
+
+import {
+  findStaleReviewCandidates,
+  type StaleReviewCandidate,
+} from './staleRecordReview'
+
 /*
   CLOUD SYNC ENGINE (Phase 6 - orchestration)
 
@@ -29,13 +40,14 @@ import { recordAndReconcilePatientNumberConflicts } from './patientNumberConflic
   engine (cloudMerge.ts), Phase 4's local conflict store
   (patientNumberConflicts.ts), and Phase 5's transport (cloudStorage.ts).
 
-  NOTHING calls syncCloudNow() yet. It is not wired into treatment
-  completion, patient creation/deletion, template editing, procedure
-  creation, any localStorage write, any React render/effect, or any
-  storage event - that wiring is explicitly the NEXT phase's job. This
-  file is safe to import and call manually (eg. from a test, or a
-  temporary dev-only button) with zero effect on any normal workflow
-  until something else actually calls it.
+  Automatic background sync is real and in production: syncCloudNow()
+  is called through cloudSyncScheduler.ts's requestCloudSync()/
+  requestCloudSyncIfSignedIn(), which App.tsx triggers after every
+  meaningful synchronized-data change (patient/treatment/template/
+  procedure create-edit-delete, tombstones), on app load, and on
+  Microsoft sign-in (see MicrosoftAccountSection.tsx's handleSignIn()).
+  It is also safe to call directly - eg. from a test - with the same
+  behavior either way.
 
   Only TYPE-ONLY imports are taken from App.tsx (erased at compile
   time under verbatimModuleSyntax) - same reasoning as
@@ -269,7 +281,10 @@ function emptyCloudSyncDocument(localUpdatedAt: string): CloudSyncDocument {
   document and must never be replaced or duplicated by this write).
 */
 
-function commitLocalState(mergedDocument: CloudSyncDocument): void {
+function commitLocalState(
+  mergedDocument: CloudSyncDocument,
+  nowIso: string
+): void {
 
   localStorage.setItem(
     PATIENTS_KEY,
@@ -340,15 +355,53 @@ function commitLocalState(mergedDocument: CloudSyncDocument): void {
 
   localStorage.setItem(LOCAL_SYNC_UPDATED_AT_KEY, mergedDocument.updatedAt)
 
+  /*
+    Phase 4.7 - the one point in this whole module where a sync is
+    genuinely, fully complete (cloud write already succeeded, and every
+    local write above just succeeded too, all inside the same try/catch
+    performSync() wraps this call in) - see deviceSyncTracking.ts's own
+    header comment for why this is deliberately a DEVICE fact, not an
+    account one, and therefore lives as its own write here rather than
+    inside the account-scoped keys above.
+  */
+  recordDeviceSyncSuccess(nowIso)
+
 }
 
 /*
   RESULT TYPE
 */
 
+/*
+  recoveredFromConflict (Phase 6) - optional, and only ever set true by
+  performSync() itself below, never by any other construction site
+  (including every existing test that builds a literal CloudSyncResult
+  for mocking purposes, which is exactly why this is optional rather
+  than required - see this file's own comment where it's set for the
+  full reasoning). True means this attempt only succeeded after one or
+  more earlier attempts in the SAME performSync() call hit a 412/409
+  ETag conflict (writeCloudSyncDocument() returning
+  'precondition-failed') and this call transparently re-read/re-merged/
+  retried - a real event worth surfacing distinctly (see syncOutcome.ts),
+  since "sync attempt succeeded and there was never any contention" and
+  "sync attempt succeeded after quietly resolving a conflict with
+  another device" are different enough stories to tell the dentist
+  apart, even though the RESULT (a fully synced, fully merged document)
+  is identical either way - this flag changes nothing about what gets
+  synced or how, only what gets reported afterward.
+*/
 export type CloudSyncResult =
-  | { status: 'synced'; patientNumberConflicts: PatientNumberConflict[] }
-  | { status: 'synced-with-conflicts'; patientNumberConflicts: PatientNumberConflict[] }
+  | {
+      status: 'synced'
+      patientNumberConflicts: PatientNumberConflict[]
+      recoveredFromConflict?: boolean
+    }
+  | {
+      status: 'synced-with-conflicts'
+      patientNumberConflicts: PatientNumberConflict[]
+      recoveredFromConflict?: boolean
+    }
+  | { status: 'stale-review-required'; candidates: StaleReviewCandidate[] }
   | { status: 'cloud-committed-locally-pending'; detail: string }
   | { status: 'contention'; attempts: number }
   | { status: 'cloud-invalid'; detail: string }
@@ -357,9 +410,42 @@ export type CloudSyncResult =
 
 const MAX_SYNC_ATTEMPTS = 3
 
-async function performSync(): Promise<CloudSyncResult> {
+export type PerformSyncOptions = {
+  /*
+    Set by cloudSyncScheduler.ts's resumeSyncAfterStaleReview() for
+    exactly the one sync attempt that follows a completed stale-record
+    review - the dentist has already decided every candidate this
+    device found (kept ones are left as normal local patients, discarded
+    ones are already tombstoned via the app's normal deletion path), so
+    re-running the stale-review gate on THIS attempt would either find
+    nothing new (harmless but pointless) or, worse, re-surface patients
+    that were already decided moments ago. Never persisted, never
+    defaulted to true anywhere else - every other call path (the
+    scheduler's normal flush, app load, sign-in) always re-evaluates
+    staleness fresh, which is exactly what should happen for a genuinely
+    new sync attempt.
+  */
+  skipStaleReviewCheck?: boolean
+}
+
+async function performSync(
+  options: PerformSyncOptions = {}
+): Promise<CloudSyncResult> {
+
+  /*
+    Phase 6 - set true the moment ANY attempt in this call hits
+    'precondition-failed' and retries; read once, at the very end, by
+    whichever attempt finally succeeds. See CloudSyncResult's own
+    recoveredFromConflict comment for why this is worth tracking at
+    all - it changes nothing about the retry behavior itself (still the
+    exact same `continue` it always was), only what the eventual
+    success result reports.
+  */
+  let hadContention = false
 
   for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
+
+    const nowIso = new Date().toISOString()
 
     const localResult = buildLocalCloudSyncDocument()
 
@@ -396,14 +482,68 @@ async function performSync(): Promise<CloudSyncResult> {
       case 'permission-denied':
         return { status: 'permission-denied', detail: cloudRead.detail }
 
+      case 'network-unreachable':
+        return { status: 'network-unreachable', detail: cloudRead.detail }
+
       case 'graph-error':
         return { status: 'graph-error', detail: cloudRead.detail }
 
     }
 
+    /*
+      STALE-DEVICE / STALE-RECORD REVIEW GATE (Phase 4.7)
+
+      Checked BEFORE any merge happens (section 3 of this phase's own
+      brief), using exactly the local/remote documents already read
+      above - no extra network round-trip needed. isDeviceSyncStale()
+      is a cheap, purely local, purely time-based check; the (slightly
+      more work) candidate search only ever runs once that's already
+      true, so a device that syncs regularly never pays for it and
+      never sees this gate fire. If candidates come back empty (either
+      because nothing on this device is actually unsynced-and-
+      untombstoned, or because skipStaleReviewCheck is set for a
+      resumed post-review attempt), this falls straight through to the
+      normal merge below - a stale device with nothing new to review
+      has nothing for the dentist to decide and should sync exactly
+      like any other device.
+    */
+
+    if (!options.skipStaleReviewCheck && isDeviceSyncStale(nowIso)) {
+
+      const candidates = findStaleReviewCandidates({
+        localPatients: localDocument.patients,
+        localSavedTreatments: localDocument.savedTreatments,
+        remotePatients: remoteDocument.patients,
+        localTombstones: localDocument.deletionTombstones,
+        remoteTombstones: remoteDocument.deletionTombstones,
+      })
+
+      if (candidates.length > 0) {
+        return { status: 'stale-review-required', candidates }
+      }
+
+    }
+
     const mergeResult = mergeCloudSyncDocuments(localDocument, remoteDocument)
 
-    const mergedDocument = mergeResult.document
+    /*
+      TOMBSTONE EXPIRY (Phase 4.7) - pruned here, right before this
+      document is validated/uploaded, so tombstones older than
+      cloudMerge.ts's TOMBSTONE_EXPIRY_MS never accumulate in the cloud
+      document either (see pruneExpiredTombstones()'s own comment for
+      why this can't live inside the pure mergeCloudSyncDocuments()
+      itself). The commit-time re-merge below prunes again for the same
+      reason - re-reading local storage there can reintroduce tombstones
+      already-expired-and-dropped here, since local storage isn't
+      rewritten until commitLocalState() runs.
+    */
+    const mergedDocument: CloudSyncDocument = {
+      ...mergeResult.document,
+      deletionTombstones: pruneExpiredTombstones(
+        mergeResult.document.deletionTombstones,
+        nowIso
+      ),
+    }
 
     const mergeValidation = validateCloudSyncDocument(mergedDocument)
 
@@ -421,6 +561,7 @@ async function performSync(): Promise<CloudSyncResult> {
       await writeCloudSyncDocument(mergeValidation.document, expectedETag)
 
     if (writeResult.status === 'precondition-failed') {
+      hadContention = true
       continue
     }
 
@@ -430,6 +571,10 @@ async function performSync(): Promise<CloudSyncResult> {
 
     if (writeResult.status === 'permission-denied') {
       return { status: 'permission-denied', detail: writeResult.detail }
+    }
+
+    if (writeResult.status === 'network-unreachable') {
+      return { status: 'network-unreachable', detail: writeResult.detail }
     }
 
     if (writeResult.status === 'graph-error') {
@@ -478,11 +623,17 @@ async function performSync(): Promise<CloudSyncResult> {
         ? mergeCloudSyncDocuments(localAtCommitTime.document, mergedDocument)
         : mergeResult
 
-    const finalDocument = finalMergeResult.document
+    const finalDocument: CloudSyncDocument = {
+      ...finalMergeResult.document,
+      deletionTombstones: pruneExpiredTombstones(
+        finalMergeResult.document.deletionTombstones,
+        nowIso
+      ),
+    }
 
     try {
 
-      commitLocalState(finalDocument)
+      commitLocalState(finalDocument, nowIso)
 
     } catch (error) {
 
@@ -504,8 +655,16 @@ async function performSync(): Promise<CloudSyncResult> {
       )
 
     return reconciledConflicts.length > 0
-      ? { status: 'synced-with-conflicts', patientNumberConflicts: reconciledConflicts }
-      : { status: 'synced', patientNumberConflicts: [] }
+      ? {
+          status: 'synced-with-conflicts',
+          patientNumberConflicts: reconciledConflicts,
+          recoveredFromConflict: hadContention,
+        }
+      : {
+          status: 'synced',
+          patientNumberConflicts: [],
+          recoveredFromConflict: hadContention,
+        }
 
   }
 
@@ -526,13 +685,15 @@ async function performSync(): Promise<CloudSyncResult> {
 
 let inFlightSync: Promise<CloudSyncResult> | null = null
 
-export function syncCloudNow(): Promise<CloudSyncResult> {
+export function syncCloudNow(
+  options?: PerformSyncOptions
+): Promise<CloudSyncResult> {
 
   if (inFlightSync) {
     return inFlightSync
   }
 
-  inFlightSync = performSync().finally(() => {
+  inFlightSync = performSync(options).finally(() => {
     inFlightSync = null
   })
 

@@ -10,6 +10,11 @@ import {
   requestCloudSyncIfSignedIn,
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
+  getPendingStaleReview,
+  subscribePendingStaleReview,
+  resumeSyncAfterStaleReview,
+  getLastSyncOutcome,
+  subscribeLastSyncOutcome,
   __resetCloudSyncSchedulerForTests,
 } from './cloudSyncScheduler'
 
@@ -349,6 +354,278 @@ describe('cloud sync status', () => {
     expect(listener).toHaveBeenCalled()
 
     unsubscribe()
+
+  })
+
+})
+
+describe('stale-record review (Phase 4.7)', () => {
+
+  const CANDIDATES = [
+    {
+      patientId: 'p1',
+      patientNumber: 1,
+      name: 'Jane Doe',
+      completedTreatmentCount: 2,
+      lastEditedAt: '2026-01-01T00:00:00.000Z',
+    },
+  ]
+
+  it('has no pending review before any sync has ever reported one', () => {
+    expect(getPendingStaleReview()).toBeNull()
+  })
+
+  it('surfaces the candidate list when syncCloudNow reports stale-review-required', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'stale-review-required',
+      candidates: CANDIDATES,
+    })
+
+    const listener = vi.fn()
+    const unsubscribe = subscribePendingStaleReview(listener)
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getPendingStaleReview()).toEqual(CANDIDATES)
+    expect(listener).toHaveBeenCalled()
+
+    unsubscribe()
+
+  })
+
+  it('treats a gated attempt as non-success for the coarse status indicator', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'stale-review-required',
+      candidates: CANDIDATES,
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getCloudSyncStatus()).toBe('unavailable')
+
+  })
+
+  it('resumeSyncAfterStaleReview clears the pending review immediately', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'stale-review-required',
+      candidates: CANDIDATES,
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getPendingStaleReview()).toEqual(CANDIDATES)
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    resumeSyncAfterStaleReview()
+
+    // Cleared synchronously/optimistically, not only once the resumed
+    // sync itself resolves.
+    expect(getPendingStaleReview()).toBeNull()
+
+    await flushMicrotasks()
+
+  })
+
+  it('resumeSyncAfterStaleReview requests exactly one more sync with skipStaleReviewCheck set', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'stale-review-required',
+      candidates: CANDIDATES,
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(mockedSyncCloudNow).toHaveBeenCalledTimes(1)
+    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(1, undefined)
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    resumeSyncAfterStaleReview()
+    await flushMicrotasks()
+
+    expect(mockedSyncCloudNow).toHaveBeenCalledTimes(2)
+    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(2, {
+      skipStaleReviewCheck: true,
+    })
+
+  })
+
+  it('only the ONE resumed attempt skips the gate - a later, unrelated mutation checks again normally', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'stale-review-required',
+      candidates: CANDIDATES,
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    resumeSyncAfterStaleReview()
+    await flushMicrotasks()
+
+    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(2, {
+      skipStaleReviewCheck: true,
+    })
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(3, undefined)
+
+  })
+
+})
+
+describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
+
+  it('is null before any sync attempt has ever resolved', () => {
+    expect(getLastSyncOutcome()).toBeNull()
+  })
+
+  it('classifies a clean success as "synced"', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'synced' })
+
+  })
+
+  it('classifies auth-failed as "not-signed-in", not a generic failure', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'auth-failed' })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'not-signed-in' })
+
+  })
+
+  it('classifies network-unreachable as "offline"', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'network-unreachable',
+      detail: 'Failed to fetch',
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'offline' })
+
+  })
+
+  it('classifies graph-error as "onedrive-unavailable" - distinct from offline', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'graph-error',
+      detail: '503',
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'onedrive-unavailable' })
+
+  })
+
+  it('classifies stale-review-required as "review-needed"', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'stale-review-required',
+      candidates: [],
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'review-needed' })
+
+  })
+
+  it('updates on every resolved attempt, overwriting the previous outcome', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'auth-failed' })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'not-signed-in' })
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'synced' })
+
+  })
+
+  it('notifies subscribers whenever the outcome changes', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'permission-denied',
+      detail: 'accessDenied',
+    })
+
+    const listener = vi.fn()
+    const unsubscribe = subscribeLastSyncOutcome(listener)
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(listener).toHaveBeenCalled()
+    expect(getLastSyncOutcome()).toEqual({ type: 'sign-in-denied' })
+
+    unsubscribe()
+
+  })
+
+  it('is reset to null by __resetCloudSyncSchedulerForTests', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'auth-failed' })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLastSyncOutcome()).not.toBeNull()
+
+    __resetCloudSyncSchedulerForTests()
+
+    expect(getLastSyncOutcome()).toBeNull()
 
   })
 

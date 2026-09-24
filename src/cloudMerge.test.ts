@@ -14,7 +14,11 @@ import {
   type CloudSyncDocument,
 } from './cloudSync'
 
-import { mergeCloudSyncDocuments } from './cloudMerge'
+import {
+  mergeCloudSyncDocuments,
+  pruneExpiredTombstones,
+  TOMBSTONE_EXPIRY_MS,
+} from './cloudMerge'
 
 /*
   Realistic factories for the actual application types (not `as any`)
@@ -102,6 +106,7 @@ function makeProcedure(overrides: Partial<Procedure> = {}): Procedure {
     name: 'Custom Procedure',
     isCustom: true,
     templateId: 'template-1',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
 }
@@ -416,6 +421,192 @@ describe('mergeCloudSyncDocuments - custom templates', () => {
 
 })
 
+describe('mergeCloudSyncDocuments - custom procedures (Phase 5.5)', () => {
+
+  it('unions custom procedures by id from both sides', () => {
+
+    const local = makeDocument({
+      customProcedures: [makeProcedure({ id: 'proc-local' })],
+    })
+
+    const remote = makeDocument({
+      customProcedures: [makeProcedure({ id: 'proc-remote' })],
+    })
+
+    const result = mergeCloudSyncDocuments(local, remote)
+
+    expect(
+      result.document.customProcedures.map(p => p.id).sort()
+    ).toEqual(['proc-local', 'proc-remote'])
+
+  })
+
+  it('same procedure id: newer updatedAt wins', () => {
+
+    const older = makeProcedure({
+      id: 'proc-a',
+      name: 'Older name',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    const newer = makeProcedure({
+      id: 'proc-a',
+      name: 'Newer name',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    })
+
+    const local = makeDocument({ customProcedures: [older] })
+    const remote = makeDocument({ customProcedures: [newer] })
+
+    const result = mergeCloudSyncDocuments(local, remote)
+
+    expect(result.document.customProcedures).toEqual([newer])
+
+  })
+
+  it('same procedure id: older updatedAt never overwrites newer content, regardless of argument order', () => {
+
+    const older = makeProcedure({
+      id: 'proc-a',
+      name: 'Older name',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    const newer = makeProcedure({
+      id: 'proc-a',
+      name: 'Newer name',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    })
+
+    // Reversed argument order from the previous test.
+    const local = makeDocument({ customProcedures: [newer] })
+    const remote = makeDocument({ customProcedures: [older] })
+
+    const result = mergeCloudSyncDocuments(local, remote)
+
+    expect(result.document.customProcedures).toEqual([newer])
+
+  })
+
+  it('equal updatedAt timestamps resolve deterministically both ways', () => {
+
+    const procedureA = makeProcedure({
+      id: 'proc-a',
+      name: 'Name A',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    const procedureB = makeProcedure({
+      id: 'proc-a',
+      name: 'Name B',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    const forward = mergeCloudSyncDocuments(
+      makeDocument({ customProcedures: [procedureA] }),
+      makeDocument({ customProcedures: [procedureB] })
+    )
+
+    const reversed = mergeCloudSyncDocuments(
+      makeDocument({ customProcedures: [procedureB] }),
+      makeDocument({ customProcedures: [procedureA] })
+    )
+
+    expect(forward.document.customProcedures).toEqual(
+      reversed.document.customProcedures
+    )
+
+  })
+
+  it('a procedure tombstone suppresses the custom procedure, from either side', () => {
+
+    const local = makeDocument({
+      customProcedures: [makeProcedure({ id: 'proc-a' })],
+    })
+
+    const remote = makeDocument({
+      deletionTombstones: [
+        makeTombstone({ entityType: 'procedure', entityId: 'proc-a' }),
+      ],
+    })
+
+    const result = mergeCloudSyncDocuments(local, remote)
+
+    expect(result.document.customProcedures).toEqual([])
+
+    // Symmetric regardless of which side carries the tombstone.
+    const reversed = mergeCloudSyncDocuments(remote, local)
+
+    expect(reversed.document.customProcedures).toEqual([])
+
+  })
+
+  it('does not confuse a procedure tombstone with a template/patient/treatment tombstone for the same id', () => {
+
+    const local = makeDocument({
+      customProcedures: [makeProcedure({ id: 'shared-id' })],
+      customTemplates: [makeTemplate({ id: 'shared-id' })],
+    })
+
+    const remote = makeDocument({
+      deletionTombstones: [
+        makeTombstone({ entityType: 'patient', entityId: 'shared-id' }),
+        makeTombstone({ entityType: 'treatment', entityId: 'shared-id' }),
+      ],
+    })
+
+    const result = mergeCloudSyncDocuments(local, remote)
+
+    // Neither the procedure nor the template is suppressed - only a
+    // 'procedure'/'procedureTemplate' tombstone (respectively) would do
+    // that, and neither is present here.
+    expect(result.document.customProcedures.map(p => p.id)).toEqual([
+      'shared-id',
+    ])
+    expect(result.document.customTemplates.map(t => t.id)).toEqual([
+      'shared-id',
+    ])
+
+  })
+
+  /*
+    CRITICAL CONSTRAINT (section 6 of this phase's brief): deleting a
+    procedure must never affect a past treatment that already used it.
+    SavedTreatment carries its own denormalized procedureId/
+    procedureName snapshot - this merge engine's own survivingSaved
+    Treatments filter (see mergeCloudSyncDocuments() itself) is never
+    conditioned on tombstonedProcedureIds, only on
+    tombstonedPatientIds/tombstonedTreatmentIds, so a treatment survives
+    a procedure's tombstone completely untouched, on both sides of a
+    merge.
+  */
+  it('a procedure tombstone never suppresses a saved treatment that used that procedure', () => {
+
+    const treatment = makeSavedTreatment({
+      id: 'treatment-1',
+      procedureId: 'proc-a',
+    })
+
+    const local = makeDocument({
+      customProcedures: [makeProcedure({ id: 'proc-a' })],
+      savedTreatments: [treatment],
+    })
+
+    const remote = makeDocument({
+      deletionTombstones: [
+        makeTombstone({ entityType: 'procedure', entityId: 'proc-a' }),
+      ],
+    })
+
+    const result = mergeCloudSyncDocuments(local, remote)
+
+    expect(result.document.customProcedures).toEqual([])
+    expect(result.document.savedTreatments).toEqual([treatment])
+
+  })
+
+})
+
 describe('mergeCloudSyncDocuments - saved treatments', () => {
 
   it('deduplicates the same saved-treatment UUID present on both sides', () => {
@@ -668,6 +859,109 @@ describe('mergeCloudSyncDocuments - document metadata', () => {
     expect(result.document.schemaVersion).toBe(CLOUD_SYNC_SCHEMA_VERSION)
     expect(result.document.app).toBe(CLOUD_SYNC_APP)
     expect(result.document.updatedAt).toBe('2026-06-01T00:00:00.000Z')
+
+  })
+
+})
+
+describe('pruneExpiredTombstones', () => {
+
+  const NOW = '2026-06-15T00:00:00.000Z'
+
+  it('keeps a tombstone younger than the expiry window', () => {
+
+    const recent = makeTombstone({
+      id: 'recent',
+      deletedAt: '2026-06-10T00:00:00.000Z', // 5 days old
+    })
+
+    expect(pruneExpiredTombstones([recent], NOW)).toEqual([recent])
+
+  })
+
+  it('drops a tombstone older than the expiry window', () => {
+
+    const ancient = makeTombstone({
+      id: 'ancient',
+      deletedAt: '2026-01-01T00:00:00.000Z', // ~5 months old
+    })
+
+    expect(pruneExpiredTombstones([ancient], NOW)).toEqual([])
+
+  })
+
+  it('keeps a tombstone exactly at the boundary, drops one just past it', () => {
+
+    const atBoundary = makeTombstone({
+      id: 'at-boundary',
+      deletedAt: new Date(
+        Date.parse(NOW) - TOMBSTONE_EXPIRY_MS
+      ).toISOString(),
+    })
+
+    const justPast = makeTombstone({
+      id: 'just-past',
+      deletedAt: new Date(
+        Date.parse(NOW) - TOMBSTONE_EXPIRY_MS - 1
+      ).toISOString(),
+    })
+
+    const result = pruneExpiredTombstones([atBoundary, justPast], NOW)
+
+    expect(result.map(tombstone => tombstone.id)).toEqual(['at-boundary'])
+
+  })
+
+  it('respects a custom maxAgeMs override', () => {
+
+    const tenDaysOld = makeTombstone({
+      id: 'ten-days',
+      deletedAt: '2026-06-05T00:00:00.000Z',
+    })
+
+    const oneDayMs = 24 * 60 * 60 * 1000
+
+    expect(pruneExpiredTombstones([tenDaysOld], NOW, oneDayMs)).toEqual([])
+    expect(
+      pruneExpiredTombstones([tenDaysOld], NOW, 30 * oneDayMs)
+    ).toEqual([tenDaysOld])
+
+  })
+
+  it('keeps a tombstone with an unparseable deletedAt rather than guessing', () => {
+
+    const malformed = makeTombstone({
+      id: 'malformed',
+      deletedAt: 'not-a-real-date',
+    })
+
+    expect(pruneExpiredTombstones([malformed], NOW)).toEqual([malformed])
+
+  })
+
+  it('prunes a mix of expired and live tombstones independently, preserving order', () => {
+
+    const live1 = makeTombstone({ id: 'live-1', deletedAt: '2026-06-14T00:00:00.000Z' })
+    const expired = makeTombstone({ id: 'expired', deletedAt: '2025-01-01T00:00:00.000Z' })
+    const live2 = makeTombstone({ id: 'live-2', deletedAt: '2026-06-01T00:00:00.000Z' })
+
+    const result = pruneExpiredTombstones([live1, expired, live2], NOW)
+
+    expect(result.map(tombstone => tombstone.id)).toEqual(['live-1', 'live-2'])
+
+  })
+
+  it('never mutates the input array', () => {
+
+    const tombstones = [
+      makeTombstone({ id: 'a', deletedAt: '2020-01-01T00:00:00.000Z' }),
+    ]
+
+    const snapshot = [...tombstones]
+
+    pruneExpiredTombstones(tombstones, NOW)
+
+    expect(tombstones).toEqual(snapshot)
 
   })
 

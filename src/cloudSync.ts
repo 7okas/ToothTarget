@@ -7,25 +7,26 @@ import type {
 } from './App'
 
 /*
-  CLOUD SYNC SCHEMA (Phase 1 - foundation only)
+  CLOUD SYNC SCHEMA
 
-  This is the FUTURE multi-device synchronization document shape and
-  its validation - deliberately kept separate from cloudBackup.ts's
-  CloudBackup, which is a different, already-shipped concept (a
-  manual, explicit, one-shot snapshot/restore). The two are allowed
-  to diverge over time (see isValidSyncSavedTreatment() below for a
-  concrete example of exactly that), so they are not meant to share
-  code beyond the underlying App.tsx types.
+  This is the real, in-production multi-device synchronization
+  document shape and its validation - deliberately kept separate from
+  cloudBackup.ts's CloudBackup, which is a different, also-shipped
+  concept (a manual, explicit, one-shot snapshot/restore). The two are
+  allowed to diverge over time (see isValidSyncSavedTreatment() below
+  for a concrete example of exactly that), so they are not meant to
+  share code beyond the underlying App.tsx types.
 
-  IMPORTANT - this file does NOTHING on its own. Nothing calls
-  validateCloudSyncDocument() yet; nothing reads or writes
-  toothtarget-data.json (or any other file) from here; there is no
-  merge logic, no automatic sync, and no UI wired to any of this.
   This module only answers one question: "is this structurally a
-  valid ToothTarget sync document, version 2?" - every decision about
+  valid ToothTarget sync document, version 2?" - it never decides
   which record wins, whether a patient-number collision exists, or
-  whether a tombstone should suppress a record is explicitly deferred
-  to a future merge-engine phase, not implemented here.
+  whether a tombstone should suppress a record; that's cloudMerge.ts's
+  job. validateCloudSyncDocument() is called on every sync, both when
+  reading the cloud document (cloudStorage.ts's readCloudSyncDocument())
+  and when about to write one (writeCloudSyncDocument()), via
+  cloudSyncEngine.ts's syncCloudNow() - the automatic sync engine that
+  runs in the background on app load, sign-in, and after every
+  synchronized-data change.
 
   Only type-only imports are taken from App.tsx - these are erased
   entirely at compile time (tsconfig has verbatimModuleSyntax), so
@@ -154,8 +155,7 @@ function isValidSyncSavedTreatment(value: unknown): value is SavedTreatment {
   is a real, non-empty timestamp string, exactly like every other
   timestamp field in this file. It does not compare updatedAt values
   against anything else; deciding which of two templates with the
-  same id "wins" is a future merge-engine concern, not this
-  validator's.
+  same id "wins" is cloudMerge.ts's concern, not this validator's.
 */
 
 function isValidSyncTemplate(value: unknown): value is ProcedureTemplate {
@@ -174,6 +174,18 @@ function isValidSyncTemplate(value: unknown): value is ProcedureTemplate {
 
 }
 
+/*
+  updatedAt is required here (Phase 5.5, added once editing/deleting a
+  procedure became possible - see App.tsx's confirmEditProcedure()/
+  deleteProcedureFromRegistry()), for the identical reason
+  SavedTreatment gained one in Phase 4.6: cloudMerge.ts's same-id
+  procedure merge needs a real timestamp to prefer an edit over a stale
+  pre-edit copy, exactly like it already does for
+  patients/templates/treatments. This only checks the field is a real,
+  non-empty timestamp string - never compares it to anything; that
+  comparison is the merge engine's job, not this validator's.
+*/
+
 function isValidSyncProcedure(value: unknown): value is Procedure {
 
   return (
@@ -183,7 +195,9 @@ function isValidSyncProcedure(value: unknown): value is Procedure {
     (value as Procedure).id.trim() !== '' &&
     typeof (value as Procedure).name === 'string' &&
     typeof (value as Procedure).templateId === 'string' &&
-    (value as Procedure).isCustom === true
+    (value as Procedure).isCustom === true &&
+    typeof (value as Procedure).updatedAt === 'string' &&
+    (value as Procedure).updatedAt.trim() !== ''
   )
 
 }
@@ -192,6 +206,7 @@ const VALID_TOMBSTONE_ENTITY_TYPES: DeletionTombstone['entityType'][] = [
   'patient',
   'procedureTemplate',
   'treatment',
+  'procedure',
 ]
 
 function isValidSyncTombstone(value: unknown): value is DeletionTombstone {
@@ -222,8 +237,8 @@ function isValidSyncTombstone(value: unknown): value is DeletionTombstone {
   two different tombstone records legitimately targeting the same
   (entityType, entityId) is an expected, tolerated case (eg. two
   devices independently deleting the same record before ever syncing)
-  - the future merge layer dedupes those by (entityType, entityId),
-  it is not this validator's job to reject the document over it.
+  - cloudMerge.ts dedupes those by (entityType, entityId), it is not
+  this validator's job to reject the document over it.
 */
 
 function hasDuplicateIds(items: { id: string }[]): boolean {
@@ -247,16 +262,18 @@ function hasDuplicateIds(items: { id: string }[]): boolean {
 /*
   DOCUMENT VALIDATION
 
-  The single entry point - checked before any future merge code would
-  ever be allowed to read a cloud document. Returns a specific,
-  plain-language reason for rejection rather than throwing, matching
-  the same discriminated-result convention cloudBackup.ts's own
-  validateCloudBackup() already established. Never mutates the input,
-  never migrates a schema-version-1 document, never decides which
-  record wins a conflict, and never checks cross-references (eg.
-  whether a Procedure's templateId actually resolves to a template in
-  this same document) - all of that is explicitly out of scope for
-  this phase, per its own design brief.
+  The single entry point - checked before cloudMerge.ts's merge engine
+  is ever allowed to read a cloud document (see cloudStorage.ts's
+  readCloudSyncDocument()/writeCloudSyncDocument()). Returns a
+  specific, plain-language reason for rejection rather than throwing,
+  matching the same discriminated-result convention cloudBackup.ts's
+  own validateCloudBackup() already established. Never mutates the
+  input, never migrates a schema-version-1 document (see
+  cloudSyncSchemaMigration.ts for that), never decides which record
+  wins a conflict, and never checks cross-references (eg. whether a
+  Procedure's templateId actually resolves to a template in this same
+  document) - all of that is deliberately out of scope for this
+  module, which only ever answers "is this structurally valid?".
 */
 
 export type CloudSyncValidationResult =

@@ -131,10 +131,21 @@ function StatisticsScreen({
     COMPARISON VIEW (optional, off by default)
 
     A deliberately smaller filter than the main panel - just
-    procedure(s) and tooth group(s), no specific-tooth picker or
-    template row - so turning it on doesn't double the size of the
-    page. It reuses the exact same filtering/statistics functions as
-    the main panel, just against a second, independent selection.
+    procedure(s), tooth group(s), and its own date range - no
+    specific-tooth picker or template row - so turning it on doesn't
+    double the size of the page. It reuses the exact same
+    filtering/statistics functions as the main panel, just against a
+    second, independent selection.
+
+    Phase 7: Group B's date range is independent of the main panel's
+    (its own preset/custom-range state below), specifically so this
+    doubles as a month/period comparison - e.g. leave every other
+    filter at "All" on both sides and set the main panel to "This
+    Month" and this one to "Last Month" to see performance/improvement
+    across the two. Defaults to "All Time", same as the main panel, so
+    turning comparison on with nothing else touched reproduces the old
+    "compare against the same period" behavior whenever the main
+    filter is also at its own "All Time" default.
   */
 
   const [showComparison, setShowComparison] =
@@ -145,6 +156,15 @@ function StatisticsScreen({
 
   const [compareToothGroupIds, setCompareToothGroupIds] =
     useState<string[]>([])
+
+  const [compareDatePresetId, setCompareDatePresetId] =
+    useState<DateRangePresetId>('allTime')
+
+  const [compareCustomDateFrom, setCompareCustomDateFrom] =
+    useState('')
+
+  const [compareCustomDateTo, setCompareCustomDateTo] =
+    useState('')
 
   if (treatments.length === 0) {
 
@@ -312,10 +332,18 @@ function StatisticsScreen({
       group => compareToothGroupIds.includes(group.id)
     )
 
+  const compareResolvedDateRange =
+    resolveDateRangePreset(
+      compareDatePresetId,
+      compareCustomDateFrom && compareCustomDateTo
+        ? { from: compareCustomDateFrom, to: `${compareCustomDateTo}T23:59:59.999Z` }
+        : null
+    )
+
   const compareFilters: StatisticsFilters =
     compareProcedureIds.length === 0 &&
     compareToothGroups.length === 0 &&
-    resolvedDateRange === null
+    compareResolvedDateRange === null
       ? ALL_TREATMENTS_FILTER
       : {
           procedureIds:
@@ -326,11 +354,11 @@ function StatisticsScreen({
           toothIds:
             resolveToothSelection(compareToothGroups, []),
           /*
-            Group B shares the same date range as the main filter -
-            comparing two groups over different time windows would
-            be misleading.
+            Group B's OWN date range (see this state's own comment
+            above) - independent of the main filter's, specifically so
+            two different time periods can be compared side by side.
           */
-          dateRange: resolvedDateRange,
+          dateRange: compareResolvedDateRange,
         }
 
   const compareFilteredTreatments =
@@ -338,6 +366,11 @@ function StatisticsScreen({
 
   const compareStats =
     calculateTreatmentStatistics(compareFilteredTreatments)
+
+  const compareDatePresetLabel =
+    DATE_RANGE_PRESETS.find(
+      preset => preset.id === compareDatePresetId
+    )?.label ?? 'All Time'
 
   const compareSelectionDescription =
     describeSelection(
@@ -347,7 +380,10 @@ function StatisticsScreen({
       [],
       procedures,
       templates
-    )
+    ) +
+    (compareDatePresetId === 'allTime'
+      ? ''
+      : ` — ${compareDatePresetLabel}`)
 
   return (
 
@@ -692,6 +728,62 @@ function StatisticsScreen({
 
             </div>
 
+            <p className="stats-filter-group-label">
+              Date Range (independent of the main filter above - this
+              is what lets you compare two different time periods)
+            </p>
+
+            <div className="stats-filter-bar">
+
+              {DATE_RANGE_PRESETS.map(preset => (
+
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`stats-filter-button ${
+                    compareDatePresetId === preset.id
+                      ? 'stats-filter-active'
+                      : ''
+                  }`}
+                  onClick={() => setCompareDatePresetId(preset.id)}
+                >
+                  {preset.label}
+                </button>
+
+              ))}
+
+            </div>
+
+            {compareDatePresetId === 'custom' && (
+
+              <div className="custom-date-range-row">
+
+                <label>
+                  From
+                  <input
+                    type="date"
+                    value={compareCustomDateFrom}
+                    onChange={event =>
+                      setCompareCustomDateFrom(event.target.value)
+                    }
+                  />
+                </label>
+
+                <label>
+                  To
+                  <input
+                    type="date"
+                    value={compareCustomDateTo}
+                    onChange={event =>
+                      setCompareCustomDateTo(event.target.value)
+                    }
+                  />
+                </label>
+
+              </div>
+
+            )}
+
             <table className="stats-table stats-compare-table">
 
               <thead>
@@ -825,9 +917,19 @@ function StatisticsScreen({
 
               <div className="stats-fastest-slowest">
 
+                {/*
+                  Patient name included alongside tooth/procedure/date
+                  - same identifying detail (and no more) the other
+                  cross-patient summary view already shows for each
+                  treatment (see the Search Treatments screen's own
+                  treatment-card rendering in App.tsx).
+                */}
+
                 {overall.fastestTreatment && (
                   <p>
                     <strong>Fastest:</strong>{' '}
+                    {overall.fastestTreatment.patientName}
+                    {' — '}
                     {getToothLabel(overall.fastestTreatment.toothId)}
                     {' — '}
                     {overall.fastestTreatment.procedureName}
@@ -842,6 +944,8 @@ function StatisticsScreen({
                 {overall.slowestTreatment && (
                   <p>
                     <strong>Slowest:</strong>{' '}
+                    {overall.slowestTreatment.patientName}
+                    {' — '}
                     {getToothLabel(overall.slowestTreatment.toothId)}
                     {' — '}
                     {overall.slowestTreatment.procedureName}

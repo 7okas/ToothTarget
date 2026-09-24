@@ -267,16 +267,15 @@ export async function signOut(): Promise<void> {
   ToothTarget feature currently depends on a token - a failure here
   must never block or crash the app.
 
-  allowInteraction (default true) exists for Phase 7's automatic cloud
-  sync: every EXISTING caller of this function (Backup to Cloud/Load
-  from Cloud, the Test Cloud Storage/Test Cloud Data File buttons) is
-  already an explicit, dentist-initiated action, where popping open a
-  Microsoft sign-in window on an expired token is expected and fine -
-  those callers pass no options and keep this exact behavior
-  unchanged. Automatic background sync is different: it can fire from
-  routine dental workflows (completing a treatment, saving a template)
-  that have nothing to do with signing in, so it must never surprise
-  the dentist with a login popup. cloudStorage.ts's
+  allowInteraction (default true) exists for automatic cloud sync:
+  every EXISTING caller of this function (Backup to Cloud/Load from
+  Cloud) is already an explicit, dentist-initiated action, where
+  popping open a Microsoft sign-in window on an expired token is
+  expected and fine - those callers pass no options and keep this
+  exact behavior unchanged. Automatic background sync is different: it
+  can fire from routine dental workflows (completing a treatment,
+  saving a template) that have nothing to do with signing in, so it
+  must never surprise the dentist with a login popup. cloudStorage.ts's
   readCloudSyncDocument()/writeCloudSyncDocument() - used only by the
   automatic sync engine, never by the manual backup UI - pass
   { allowInteraction: false } so a token that needs interactive

@@ -45,6 +45,17 @@ function makeTreatment(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function makeProcedure(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'procedure-1',
+    name: 'Custom Procedure',
+    isCustom: true,
+    templateId: 'template-1',
+    updatedAt: '2025-02-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
 describe('migrateCloudSyncDocumentShape - patient createdAt backfill', () => {
 
   it('backfills a missing createdAt from the patient\'s own updatedAt, and the migrated document then passes strict validation', () => {
@@ -162,6 +173,78 @@ describe('migrateCloudSyncDocumentShape - saved treatment updatedAt backfill', (
 
 })
 
+describe('migrateCloudSyncDocumentShape - procedure updatedAt backfill (Phase 5.5)', () => {
+
+  it('backfills a missing updatedAt from the document\'s own top-level updatedAt, and the migrated document then passes strict validation', () => {
+
+    const { updatedAt: _drop, ...procedureWithoutUpdatedAt } = makeProcedure()
+
+    const document = makeDocument({
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      customProcedures: [procedureWithoutUpdatedAt],
+    })
+
+    const migrated = migrateCloudSyncDocumentShape(document) as any
+
+    expect(migrated.customProcedures[0].updatedAt).toBe('2026-07-01T00:00:00.000Z')
+
+    const validation = validateCloudSyncDocument(migrated)
+    expect(validation.valid).toBe(true)
+
+  })
+
+  it('backfills every procedure missing updatedAt with the same document-level timestamp', () => {
+
+    const { updatedAt: _drop, ...procA } = makeProcedure({ id: 'proc-a' })
+    const { updatedAt: _drop2, ...procB } = makeProcedure({ id: 'proc-b' })
+
+    const document = makeDocument({
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      customProcedures: [procA, procB],
+    })
+
+    const migrated = migrateCloudSyncDocumentShape(document) as any
+
+    expect(migrated.customProcedures[0].updatedAt).toBe('2026-07-01T00:00:00.000Z')
+    expect(migrated.customProcedures[1].updatedAt).toBe('2026-07-01T00:00:00.000Z')
+
+  })
+
+  it('never overwrites an updatedAt that is already a valid, different timestamp', () => {
+
+    const procedure = makeProcedure({ updatedAt: '2025-04-01T00:00:00.000Z' })
+
+    const document = makeDocument({
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      customProcedures: [procedure],
+    })
+
+    const migrated = migrateCloudSyncDocumentShape(document) as any
+
+    expect(migrated.customProcedures[0].updatedAt).toBe('2025-04-01T00:00:00.000Z')
+
+  })
+
+  it('leaves a procedure untouched (no fabricated updatedAt) when the document-level updatedAt is ALSO missing/invalid, so validation still correctly rejects it', () => {
+
+    const { updatedAt: _drop, ...procedureWithoutUpdatedAt } = makeProcedure()
+
+    const document = makeDocument({
+      updatedAt: '',
+      customProcedures: [procedureWithoutUpdatedAt],
+    })
+
+    const migrated = migrateCloudSyncDocumentShape(document) as any
+
+    expect(migrated.customProcedures[0].updatedAt).toBeUndefined()
+
+    const validation = validateCloudSyncDocument(migrated)
+    expect(validation.valid).toBe(false)
+
+  })
+
+})
+
 describe('migrateCloudSyncDocumentShape - genuine corruption is never masked', () => {
 
   it('still rejects a document where a patient has a wrong-typed field unrelated to the backfilled fields', () => {
@@ -190,6 +273,19 @@ describe('migrateCloudSyncDocumentShape - genuine corruption is never masked', (
 
   })
 
+  it('still rejects a document where a procedure has a wrong-typed field unrelated to updatedAt', () => {
+
+    const corruptProcedure = makeProcedure({ isCustom: 'not-a-boolean' })
+
+    const document = makeDocument({ customProcedures: [corruptProcedure] })
+
+    const migrated = migrateCloudSyncDocumentShape(document)
+
+    const validation = validateCloudSyncDocument(migrated)
+    expect(validation.valid).toBe(false)
+
+  })
+
   it('does not throw and passes non-document input straight through untouched', () => {
 
     expect(migrateCloudSyncDocumentShape(null)).toBe(null)
@@ -206,10 +302,12 @@ describe('migrateCloudSyncDocumentShape - already up-to-date document', () => {
 
     const patient = makePatient()
     const treatment = makeTreatment()
+    const procedure = makeProcedure()
 
     const document = makeDocument({
       patients: [patient],
       savedTreatments: [treatment],
+      customProcedures: [procedure],
     })
 
     const migrated = migrateCloudSyncDocumentShape(document)

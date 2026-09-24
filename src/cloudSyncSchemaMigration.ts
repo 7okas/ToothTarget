@@ -8,16 +8,15 @@
   structure) reliably caught - relaxing it to tolerate missing fields
   would also let real corruption through.
 
-  The problem that surfaced tonight (root-caused via [sync-diag]
-  logging, since removed) is different: a document written by an
-  OLDER version of this app, before a field existed at all, is not
-  corrupt - it's just outdated. Patient.createdAt and
-  SavedTreatment.updatedAt are the two concrete examples so far
-  (Phase 4.6), but this is a recurring situation, not a one-off - any
-  future phase that adds a required field to a synced type will hit
-  the exact same "cloud document predates this field" case (the
-  comment on this file's own README example calls out Phase 4.7's
-  planned device-tracking fields as the next one).
+  The problem that first surfaced (root-caused via [sync-diag] logging,
+  since removed) is different: a document written by an OLDER version
+  of this app, before a field existed at all, is not corrupt - it's
+  just outdated. Patient.createdAt and SavedTreatment.updatedAt (Phase
+  4.6) were the first two concrete examples; Procedure.updatedAt (Phase
+  5.5, added once editing/deleting a procedure became possible) is the
+  latest. This is a recurring situation, not a one-off - any future
+  phase that adds a required field to a synced type will hit the exact
+  same "cloud document predates this field" case.
 
   This module is that fix, generalized: a small, ordered list of
   migration steps, each responsible for ONE known field, each backfilling
@@ -149,6 +148,61 @@ function backfillSavedTreatmentUpdatedAt(
 }
 
 /*
+  Procedure.updatedAt (Phase 5.5) - added once editing/deleting a
+  procedure became possible. Unlike Patient/SavedTreatment, a Procedure
+  record carries no OTHER timestamp field to honestly derive one from
+  (just id/name/isCustom/templateId/regionTemplateIds) - falling back to
+  the SAME record's own data, this migration's usual approach, isn't
+  possible here. Falls back instead to the DOCUMENT's own top-level
+  updatedAt (the last time this whole synced document, including this
+  procedure, is actually known to have been written) - not a fabricated
+  "now" (forbidden by rule 2 above), but a real, already-present value
+  in the same payload, just one level up from the individual record.
+  This is a coarser approximation than the other two backfills (every
+  procedure missing the field gets the SAME timestamp, rather than one
+  derived from its own history), but it is still an honest one, and
+  critically it means an existing cloud document with custom procedures
+  from before this field existed keeps syncing instead of being
+  rejected outright. If the document itself has no valid updatedAt
+  either, there is truly no honest fallback left - left untouched, so
+  isValidSyncProcedure() still rejects it.
+*/
+function backfillProcedureUpdatedAt(
+  document: Record<string, unknown>
+): Record<string, unknown> {
+
+  if (!Array.isArray(document.customProcedures)) {
+    return document
+  }
+
+  const documentUpdatedAt = document.updatedAt
+
+  if (!isValidTimestamp(documentUpdatedAt)) {
+    return document
+  }
+
+  return {
+    ...document,
+    customProcedures: document.customProcedures.map(procedure => {
+
+      if (!procedure || typeof procedure !== 'object') {
+        return procedure
+      }
+
+      const record = procedure as Record<string, unknown>
+
+      if (isValidTimestamp(record.updatedAt)) {
+        return procedure
+      }
+
+      return { ...record, updatedAt: documentUpdatedAt }
+
+    }),
+  }
+
+}
+
+/*
   Ordered list of known field migrations - add a new step here (not a
   change to validateCloudSyncDocument() itself) the next time a synced
   type gains a required field. Order between existing steps doesn't
@@ -159,7 +213,11 @@ function backfillSavedTreatmentUpdatedAt(
 */
 const CLOUD_DOCUMENT_MIGRATION_STEPS: ReadonlyArray<
   (document: Record<string, unknown>) => Record<string, unknown>
-> = [backfillPatientCreatedAt, backfillSavedTreatmentUpdatedAt]
+> = [
+  backfillPatientCreatedAt,
+  backfillSavedTreatmentUpdatedAt,
+  backfillProcedureUpdatedAt,
+]
 
 /*
   Entry point - readCloudSyncDocument() (cloudStorage.ts) calls this on

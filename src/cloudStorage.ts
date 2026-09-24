@@ -5,50 +5,42 @@ import { migrateCloudSyncDocumentShape } from './cloudSyncSchemaMigration'
 /*
   CLOUD STORAGE (Microsoft Graph OneDrive App Folder)
 
-  Read/write helpers for ToothTarget's single cloud data file,
-  toothtarget-data.json, inside the signed-in Microsoft account's
-  OneDrive App Folder (Files.ReadWrite.AppFolder - already granted,
-  no new scopes here). Same Graph endpoints and access-token pattern
-  already proven working in graphTest.ts.
+  Read/write helpers for ToothTarget's two cloud data files, both
+  inside the signed-in Microsoft account's OneDrive App Folder
+  (Files.ReadWrite.AppFolder - already granted, no new scopes here):
 
-  This module is intentionally inert on its own: nothing in
-  ToothTarget calls readCloudData()/writeCloudData() yet, and it
-  never touches patient/treatment/template data or any existing
-  localStorage key. It only exists so a later, separate step can wire
-  actual backup/sync on top of it.
+    - toothtarget-data.json (readCloudData()/writeCloudData() below) -
+      used only by cloudBackup.ts's createCloudBackup()/
+      applyCloudRestore(), the manual, explicit "Backup to Cloud"/
+      "Load from Cloud" actions a dentist presses in
+      MicrosoftAccountSection.tsx.
+    - toothtarget-sync.json (readCloudSyncDocument()/
+      writeCloudSyncDocument() below) - the real-time, automatic,
+      multi-device sync document, used only by cloudSyncEngine.ts's
+      syncCloudNow().
+
+  Kept as two separate files/functions on purpose, so the manual
+  backup/restore feature and automatic background sync can never
+  overwrite each other - each has exactly one writer.
 
   ============================================================
-  PHASE 5 ADDITION - SYNC DOCUMENT TRANSPORT (ETag-conditional)
+  SYNC DOCUMENT TRANSPORT (ETag-conditional)
   ============================================================
 
   readCloudSyncDocument()/writeCloudSyncDocument() below are a
-  SEPARATE pair of functions for the Phase 1 CloudSyncDocument (v2
-  schema) - deliberately NOT layered on top of readCloudData()/
+  SEPARATE pair of functions for the CloudSyncDocument (v2 schema,
+  cloudSync.ts) - deliberately NOT layered on top of readCloudData()/
   writeCloudData() above, and deliberately targeting a DIFFERENT file
-  name (see CLOUD_SYNC_FILE_NAME below), for a concrete reason found
-  during this phase's audit: toothtarget-data.json is already claimed
-  by TWO existing, real features -
-  createCloudBackup()/applyCloudRestore() (cloudBackup.ts's "Backup to
-  Cloud"/"Load from Cloud", schemaVersion 1) and
-  cloudStorageTest.ts's "Test Cloud Data File" connectivity check
-  (an unconditional throwaway-payload overwrite). Pointing the new
-  schemaVersion-2 sync document at that same file would mean three
-  incompatible writers fighting over one file - eg. clicking "Test
-  Cloud Data File" would silently destroy a real sync document, and a
-  sync write would silently destroy a real backup. Both existing
-  features are left completely untouched (see cloudBackup.ts/
-  cloudStorageTest.ts/MicrosoftAccountSection.tsx, none of which are
-  modified in this phase) and keep using toothtarget-data.json exactly
-  as before; the sync document gets its own dedicated file instead, so
-  there is exactly one writer per file rather than three sharing one.
+  name (see CLOUD_SYNC_FILE_NAME below), so the sync document and a
+  manual backup can never collide over one shared file.
 
-  Nothing in ToothTarget calls readCloudSyncDocument()/
-  writeCloudSyncDocument() yet either - no automatic sync, no merge
-  orchestration, no retry-after-412, no UI. This phase is transport
-  only: read the sync document + its Graph ETag, and conditionally
-  write it back. Reuses the exact same getAccessToken() (auth.ts),
-  GRAPH_APPROOT, and describeGraphError() already used above - no new
-  MSAL instance, no new login flow, no new scopes.
+  Called automatically by cloudSyncEngine.ts's syncCloudNow() - on app
+  load, on Microsoft sign-in, and after every synchronized-data change
+  (see cloudSyncScheduler.ts) - with retry-after-412 handled by
+  syncCloudNow() itself, one layer up. Reuses the exact same
+  getAccessToken() (auth.ts), GRAPH_APPROOT, and describeGraphError()
+  already used above - no new MSAL instance, no new login flow, no new
+  scopes.
 */
 
 const GRAPH_APPROOT =
@@ -190,15 +182,26 @@ const CLOUD_SYNC_FILE_NAME = 'toothtarget-sync.json'
   Shared failure states between read and write - deliberately never
   collapsed into one generic "Cloud sync failed" message/status, so a
   future caller can tell "you're not signed in" apart from "Graph
-  rejected this for a permissions reason" apart from "something else
-  went wrong talking to Graph" (which also covers plain network
-  failures - offline, DNS, etc. - since those arrive as a thrown
-  error from fetch() itself rather than an HTTP status).
+  rejected this for a permissions reason" apart from "the network
+  itself is unreachable" apart from "Graph responded, but with an
+  error" (Phase 6 - previously the last two were both reported as
+  'graph-error', since both arrive from inside a fetch() try/catch;
+  they're now split by WHERE the failure happened: 'network-unreachable'
+  is a thrown exception from fetch() itself - offline, DNS failure, etc.
+  - never a response Graph actually sent, whereas 'graph-error' is
+  reserved for cases where a response WAS received (an unexpected
+  non-2xx status, or a 2xx response whose body wasn't shaped as
+  expected) - see classifyGraphFailure()/describeNetworkFailure() below
+  for exactly where each is produced. This distinction is what lets
+  cloudSyncScheduler.ts's sync-outcome classification (syncOutcome.ts)
+  tell the dentist "no internet connection" apart from "couldn't reach
+  OneDrive" instead of one generic message for both.
 */
 
 export type CloudSyncTransportFailure =
   | { status: 'auth-failed' }
   | { status: 'permission-denied'; detail: string }
+  | { status: 'network-unreachable'; detail: string }
   | { status: 'graph-error'; detail: string }
 
 export type CloudSyncReadResult =
@@ -289,7 +292,7 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
     )
 
   } catch (error) {
-    return { status: 'graph-error', detail: describeNetworkFailure(error) }
+    return { status: 'network-unreachable', detail: describeNetworkFailure(error) }
   }
 
   if (metadataResponse.status === 404) {
@@ -337,7 +340,7 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
     )
 
   } catch (error) {
-    return { status: 'graph-error', detail: describeNetworkFailure(error) }
+    return { status: 'network-unreachable', detail: describeNetworkFailure(error) }
   }
 
   /*
@@ -507,7 +510,7 @@ export async function writeCloudSyncDocument(
     )
 
   } catch (error) {
-    return { status: 'graph-error', detail: describeNetworkFailure(error) }
+    return { status: 'network-unreachable', detail: describeNetworkFailure(error) }
   }
 
   if (sessionResponse.status === 412 || sessionResponse.status === 409) {
@@ -573,7 +576,7 @@ export async function writeCloudSyncDocument(
     })
 
   } catch (error) {
-    return { status: 'graph-error', detail: describeNetworkFailure(error) }
+    return { status: 'network-unreachable', detail: describeNetworkFailure(error) }
   }
 
   if (uploadResponse.status === 412 || uploadResponse.status === 409) {

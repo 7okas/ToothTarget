@@ -187,6 +187,58 @@ describe('readCloudSyncDocument', () => {
 
   })
 
+  /*
+    Phase 6 - fetch() itself throwing (never reaching a Graph response
+    at all) is now reported as its own distinct 'network-unreachable'
+    status, separate from 'graph-error' (a response WAS received, just
+    an unexpected one - see the metadata-parse-failure test below).
+  */
+  it('maps a thrown fetch error on the metadata request to network-unreachable, not graph-error', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('network-unreachable')
+    expect(result.status).not.toBe('graph-error')
+
+    if (result.status === 'network-unreachable') {
+      expect(result.detail).toContain('Failed to fetch')
+    }
+
+  })
+
+  it('maps a thrown fetch error on the content request to network-unreachable', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('network-unreachable')
+
+  })
+
+  it('still maps a genuine Graph-side response failure (a bad response body) to graph-error, not network-unreachable', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    // A response WAS received (200 OK), but its body has no eTag -
+    // this is a Graph/OneDrive anomaly, not a network problem.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('graph-error')
+    expect(result.status).not.toBe('network-unreachable')
+
+  })
+
 })
 
 describe('writeCloudSyncDocument', () => {
@@ -368,6 +420,50 @@ describe('writeCloudSyncDocument', () => {
 
     expect(result).toEqual({ status: 'auth-failed' })
     expect(fetchMock).not.toHaveBeenCalled()
+
+  })
+
+  it('maps a thrown fetch error on createUploadSession to network-unreachable, not graph-error', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const result = await writeCloudSyncDocument(makeDocument(), null)
+
+    expect(result.status).toBe('network-unreachable')
+    expect(result.status).not.toBe('graph-error')
+
+  })
+
+  it('maps a thrown fetch error on the final upload PUT to network-unreachable', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(200, { uploadUrl: 'https://upload.example/session-6' })
+      )
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+
+    const result = await writeCloudSyncDocument(makeDocument(), null)
+
+    expect(result.status).toBe('network-unreachable')
+
+  })
+
+  it('still maps a genuine Graph-side response failure (a bad session body) to graph-error, not network-unreachable', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    // A response WAS received (200 OK), but with no uploadUrl - a
+    // Graph/OneDrive anomaly, not a network problem.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}))
+
+    const result = await writeCloudSyncDocument(makeDocument(), null)
+
+    expect(result.status).toBe('graph-error')
+    expect(result.status).not.toBe('network-unreachable')
 
   })
 

@@ -1017,6 +1017,7 @@ button:disabled:hover {
 }
 
 .sync-status-icon-success,
+.sync-status-icon-attention,
 .sync-status-icon-failure {
   position: relative;
 }
@@ -1025,11 +1026,26 @@ button:disabled:hover {
   background: var(--color-success);
 }
 
+/*
+  Phase 6 - a third, visually distinct "settled" icon state alongside
+  success/failure: an outcome that technically requires the dentist's
+  attention (an unresolved patient-number conflict, an expired
+  sign-in, corrupted cloud data) but isn't framed as an outright
+  failure either - amber, the same warning color already used for the
+  patient-conflict banner on Home, rather than the sharper red
+  .sync-status-icon-failure uses for outcomes that are just a
+  transient, self-resolving hiccup (offline, a busy OneDrive, etc).
+*/
+.sync-status-icon-attention {
+  background: var(--color-warning);
+}
+
 .sync-status-icon-failure {
   background: var(--color-danger);
 }
 
 .sync-status-icon-success::after,
+.sync-status-icon-attention::after,
 .sync-status-icon-failure::after {
   content: '';
   position: absolute;
@@ -1044,6 +1060,11 @@ button:disabled:hover {
 
 .sync-status-icon-success::after {
   content: '\2713';
+}
+
+.sync-status-icon-attention::after {
+  content: '!';
+  font-weight: var(--weight-bold);
 }
 
 .sync-status-icon-failure::after {
@@ -1066,73 +1087,120 @@ button:disabled:hover {
   color: var(--color-danger-strong);
 }
 
+.sync-status-text-attention {
+  color: var(--color-warning-strong);
+}
+
 .sync-status-text-fading {
   opacity: 0;
 }
 
 
 /* ===========================
-   Startup sync overlay (Phase 4, Part B) - centered, temporary,
-   first-sync-of-session only
+   Startup sign-in/sync gate (Phase 6.5) - full-screen, shown before
+   the patient list is reachable, replacing the old Phase 4 startup
+   sync overlay
 
-   Separate and more prominent than the small top-right badge above -
-   a large, clearly-defined centered card rather than a corner pill -
-   but reuses the exact same fade-out mechanics (400ms opacity
-   transition, a `-fading` modifier class) for visual consistency with
-   it. pointer-events: none for the same reason as the badge: purely
-   informational, must never intercept a tap. z-index sits above the
-   badge (40) since it's meant to be the more prominent of the two,
-   but still below .modal-overlay's (100).
+   Unlike that overlay (pointer-events: none, purely informational),
+   this genuinely blocks the app underneath - opaque full-viewport
+   background, real pointer events - since App.tsx itself isn't
+   reachable until this is dismissed (see StartupGateScreen.tsx's own
+   header comment for why <App/> still stays mounted behind it). Sits
+   above every other floating element on the page, including
+   .modal-overlay (100), since it gates all of them.
 
-   Sizing/contrast deliberately pushed further than the badge or even
-   .modal-card - this is the ONE moment the app most needs to avoid
-   looking blank/broken (the very first load), so it earns being the
-   most visually assertive floating element on the page. Colors still
-   come from the same --color-* token set every other card in the app
-   uses (--color-surface background, --color-border-strong border) -
-   checked App.css for a prefers-color-scheme: dark block before
-   adding one of my own and found none anywhere in this file (unlike
-   index.css's now-mostly-removed template tokens, which did have a
-   dark variant) - every card/badge in this app, including this one,
-   is currently light-mode-only by design, so a dark-mode override
-   here alone would be an inconsistent special case, not a fix.
+   Reuses .sync-status-spin (defined above, for the small persistent
+   badge's own spinner) rather than a second copy of the same
+   keyframes, and the same --color-* token set as every other card in
+   the app (see that section's own comment on why this app is
+   currently light-mode-only by design).
 =========================== */
 
-.startup-sync-overlay {
+.startup-gate-overlay {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 60;
-  display: inline-flex;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: var(--color-bg);
+}
+
+.startup-gate-card {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   gap: var(--space-4);
-  font-size: var(--text-xl);
-  font-weight: var(--weight-bold);
-  color: var(--color-text);
   background: var(--color-surface);
-  border: 2px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
-  padding: var(--space-6) var(--space-8);
-  box-shadow: 0 20px 50px rgba(20, 23, 28, 0.28), 0 4px 12px rgba(20, 23, 28, 0.16);
-  pointer-events: none;
+  padding: var(--space-8) var(--space-6);
+  max-width: 440px;
+  width: 100%;
+  max-height: calc(100vh - var(--space-8));
+  overflow-y: auto;
+  text-align: center;
+  box-shadow: var(--shadow-md);
+}
+
+.startup-gate-card h2 {
+  margin: 0;
+}
+
+.startup-gate-card p {
+  margin: 0;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.startup-gate-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+.startup-gate-secondary-button {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1.5px solid var(--color-border-strong);
+}
+
+.startup-gate-secondary-button:hover {
+  background: var(--color-surface-alt);
+}
+
+.startup-gate-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
   opacity: 1;
   transition: opacity 400ms ease;
 }
 
-.startup-sync-overlay-success {
-  color: var(--color-success-strong);
-}
-
-.startup-sync-overlay-error {
-  color: var(--color-danger-strong);
-}
-
-.startup-sync-overlay-fading {
+.startup-gate-result-fading {
   opacity: 0;
 }
 
-.startup-sync-icon {
+.startup-gate-status-label {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+  color: var(--color-text);
+}
+
+.startup-gate-status-success {
+  color: var(--color-success-strong);
+}
+
+.startup-gate-status-error {
+  margin: 0;
+  color: var(--color-danger-strong);
+}
+
+.startup-gate-icon {
   display: inline-block;
   flex-shrink: 0;
   width: 40px;
@@ -1140,27 +1208,27 @@ button:disabled:hover {
   border-radius: 50%;
 }
 
-.startup-sync-icon-spinner {
+.startup-gate-icon-spinner {
   border: 4px solid var(--color-border-strong);
   border-top-color: var(--color-text-muted);
   animation: sync-status-spin 800ms linear infinite;
 }
 
-.startup-sync-icon-success,
-.startup-sync-icon-error {
+.startup-gate-icon-success,
+.startup-gate-icon-error {
   position: relative;
 }
 
-.startup-sync-icon-success {
+.startup-gate-icon-success {
   background: var(--color-success);
 }
 
-.startup-sync-icon-error {
+.startup-gate-icon-error {
   background: var(--color-danger);
 }
 
-.startup-sync-icon-success::after,
-.startup-sync-icon-error::after {
+.startup-gate-icon-success::after,
+.startup-gate-icon-error::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1172,11 +1240,11 @@ button:disabled:hover {
   color: #fff;
 }
 
-.startup-sync-icon-success::after {
+.startup-gate-icon-success::after {
   content: '\2713';
 }
 
-.startup-sync-icon-error::after {
+.startup-gate-icon-error::after {
   content: '\2715';
 }
 

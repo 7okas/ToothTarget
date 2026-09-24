@@ -131,6 +131,7 @@ export type DateRangePresetId =
   | 'today'
   | 'thisWeek'
   | 'thisMonth'
+  | 'lastMonth'
   | 'last3Months'
   | 'thisYear'
   | 'allTime'
@@ -144,6 +145,7 @@ export const DATE_RANGE_PRESETS: {
   { id: 'today', label: 'Today' },
   { id: 'thisWeek', label: 'This Week' },
   { id: 'thisMonth', label: 'This Month' },
+  { id: 'lastMonth', label: 'Last Month' },
   { id: 'last3Months', label: 'Last 3 Months' },
   { id: 'thisYear', label: 'This Year' },
   { id: 'custom', label: 'Custom Range' },
@@ -175,6 +177,26 @@ export function resolveDateRangePreset(
 
   if (presetId === 'thisMonth') {
     start.setDate(1)
+  }
+
+  /*
+    lastMonth is the one preset where `end` can't stay "now" - it needs
+    the previous calendar month's own start AND end, e.g. filed on any
+    day in March, "Last Month" means the whole of February. Computed as
+    the millisecond right before this month began, which is always the
+    last instant of the previous month regardless of how many days it
+    had or a year boundary (JS Date normalizes month/day overflow on
+    its own).
+  */
+  if (presetId === 'lastMonth') {
+
+    start.setDate(1)
+    start.setMonth(start.getMonth() - 1)
+
+    end.setDate(1)
+    end.setHours(0, 0, 0, 0)
+    end.setTime(end.getTime() - 1)
+
   }
 
   if (presetId === 'last3Months') {

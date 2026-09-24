@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /*
   cloudStorage.ts is mocked entirely (per this phase's own instruction
@@ -40,6 +40,11 @@ import {
 } from './cloudSyncEngine'
 
 import { readPersistedPatientNumberConflicts } from './patientNumberConflicts'
+
+import {
+  recordDeviceSyncSuccess,
+  getDeviceLastSyncAt,
+} from './deviceSyncTracking'
 
 const mockedRead = vi.mocked(readCloudSyncDocument)
 const mockedWrite = vi.mocked(writeCloudSyncDocument)
@@ -181,10 +186,19 @@ function makeProcedure(overrides: Partial<Procedure> = {}): Procedure {
     name: 'Custom Procedure',
     isCustom: true,
     templateId: 'template-1',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
 }
 
+/*
+  deletedAt defaults to "right now" (Phase 4.7), not a fixed literal
+  date - see cloudSync.integration.test.ts's own copy of this factory
+  for why: a fixed past date eventually falls outside
+  pruneExpiredTombstones()'s window as real time passes, silently
+  pruning it out of every test that uses the default without meaning
+  to exercise expiry at all.
+*/
 function makeTombstone(
   overrides: Partial<DeletionTombstone> = {}
 ): DeletionTombstone {
@@ -192,7 +206,7 @@ function makeTombstone(
     id: 'tombstone-1',
     entityType: 'patient',
     entityId: 'patient-1',
-    deletedAt: '2026-01-01T00:00:00.000Z',
+    deletedAt: new Date().toISOString(),
     ...overrides,
   }
 }
@@ -413,6 +427,7 @@ describe('syncCloudNow - normal merge', () => {
       name: 'RCT',
       isCustom: false,
       templateId: 'rct-molar',
+      updatedAt: '2024-01-01T00:00:00.000Z',
     }
 
     seedLocalSynchronizedData({
@@ -562,12 +577,43 @@ describe('syncCloudNow - conditional writes and contention', () => {
 
     expect(result.status).toBe('synced')
 
+    /*
+      Phase 6 - a sync that only succeeded after retrying past a real
+      412 reports that distinctly (recoveredFromConflict: true), so the
+      dentist can be told "sync conflict — resolved automatically"
+      rather than an indistinguishable plain "Synced".
+    */
+    if (result.status === 'synced') {
+      expect(result.recoveredFromConflict).toBe(true)
+    }
+
     const [, secondETag] = mockedWrite.mock.calls[1]
     expect(secondETag).toBe('"e2"')
 
     expect(
       readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
     ).toEqual(['a', 'b', 'c'])
+
+  })
+
+  it('reports recoveredFromConflict: false for a sync that never hit a 412 at all', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    const result = await syncCloudNow()
+
+    expect(result.status).toBe('synced')
+
+    if (result.status === 'synced') {
+      expect(result.recoveredFromConflict).toBe(false)
+    }
 
   })
 
@@ -677,6 +723,62 @@ describe('syncCloudNow - failure safety', () => {
     const result = await syncCloudNow()
 
     expect(result).toEqual({ status: 'auth-failed' })
+    expect(readKey<Patient[]>('toothTargetPatients')).toEqual(localPatients)
+
+  })
+
+  /*
+    Phase 6 - network-unreachable (the network itself is down) is
+    reported distinctly from graph-error (OneDrive responded, just with
+    an error) at every layer this engine touches - see
+    cloudStorage.test.ts for the same split at the transport layer
+    itself. Local data must be just as untouched here as it already is
+    for every other early-return failure above.
+  */
+  it('propagates network-unreachable from a failed cloud READ without touching local state', async () => {
+
+    const localPatients = [makePatient({ id: 'a' })]
+
+    seedLocalSynchronizedData({ patients: localPatients })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'network-unreachable',
+      detail: 'Failed to fetch',
+    })
+
+    const result = await syncCloudNow()
+
+    expect(result).toEqual({
+      status: 'network-unreachable',
+      detail: 'Failed to fetch',
+    })
+    expect(mockedWrite).not.toHaveBeenCalled()
+    expect(readKey<Patient[]>('toothTargetPatients')).toEqual(localPatients)
+
+  })
+
+  it('propagates network-unreachable from a failed cloud WRITE without touching local state', async () => {
+
+    const localPatients = [makePatient({ id: 'a' })]
+
+    seedLocalSynchronizedData({ patients: localPatients })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({
+      status: 'network-unreachable',
+      detail: 'Failed to fetch',
+    })
+
+    const result = await syncCloudNow()
+
+    expect(result).toEqual({
+      status: 'network-unreachable',
+      detail: 'Failed to fetch',
+    })
     expect(readKey<Patient[]>('toothTargetPatients')).toEqual(localPatients)
 
   })
@@ -1087,6 +1189,305 @@ describe('reconcileSyncedAccount - per-account local caches (Phase 4)', () => {
 
     reconcileSyncedAccount('account-c')
     expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['c1'])
+
+  })
+
+})
+
+describe('syncCloudNow - stale-record review gate (Phase 4.7)', () => {
+
+  const NOW = '2026-06-15T00:00:00.000Z'
+  const LONG_AGO = '2026-01-01T00:00:00.000Z' // well over a month before NOW
+  const RECENTLY = '2026-06-10T00:00:00.000Z' // 5 days before NOW
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(NOW))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('gates a stale device with an unsynced, untombstoned local patient - no cloud write happens', async () => {
+
+    recordDeviceSyncSuccess(LONG_AGO)
+
+    seedLocalSynchronizedData({
+      patients: [makePatient({ id: 'local-only', patientNumber: 7 })],
+    })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+
+    const result = await syncCloudNow()
+
+    expect(result.status).toBe('stale-review-required')
+
+    if (result.status !== 'stale-review-required') {
+      throw new Error('expected stale-review-required')
+    }
+
+    expect(result.candidates).toEqual([
+      {
+        patientId: 'local-only',
+        patientNumber: 7,
+        name: 'Jane Doe',
+        completedTreatmentCount: 0,
+        lastEditedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ])
+
+    expect(mockedWrite).not.toHaveBeenCalled()
+
+    // Local state is completely untouched - the gate fires before any
+    // merge or commit.
+    expect(
+      readKey<Patient[]>('toothTargetPatients').map(p => p.id)
+    ).toEqual(['local-only'])
+
+  })
+
+  it('never gates a device that syncs regularly, even with unsynced local patients', async () => {
+
+    recordDeviceSyncSuccess(RECENTLY)
+
+    seedLocalSynchronizedData({
+      patients: [makePatient({ id: 'local-only' })],
+    })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    const result = await syncCloudNow()
+
+    expect(result.status).toBe('synced')
+    expect(mockedWrite).toHaveBeenCalledTimes(1)
+
+  })
+
+  it('does not gate a stale device once every local patient already exists on the cloud', async () => {
+
+    const patient = makePatient({ id: 'already-synced' })
+
+    recordDeviceSyncSuccess(LONG_AGO)
+
+    seedLocalSynchronizedData({ patients: [patient] })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument({ patients: [patient] }),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    const result = await syncCloudNow()
+
+    expect(result.status).toBe('synced')
+
+  })
+
+  it('skipStaleReviewCheck bypasses the gate even on a stale device with real candidates', async () => {
+
+    recordDeviceSyncSuccess(LONG_AGO)
+
+    seedLocalSynchronizedData({
+      patients: [makePatient({ id: 'local-only' })],
+    })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    const result = await syncCloudNow({ skipStaleReviewCheck: true })
+
+    expect(result.status).toBe('synced')
+    expect(
+      readKey<Patient[]>('toothTargetPatients').map(p => p.id)
+    ).toEqual(['local-only'])
+
+  })
+
+  it('records this device\'s successful sync time only once a sync genuinely completes', async () => {
+
+    expect(getDeviceLastSyncAt()).toBeNull()
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    await syncCloudNow()
+
+    expect(getDeviceLastSyncAt()).toBe(NOW)
+
+  })
+
+  it('does not record a device sync time when the cloud write fails', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({
+      status: 'graph-error',
+      detail: 'offline',
+    })
+
+    await syncCloudNow()
+
+    expect(getDeviceLastSyncAt()).toBeNull()
+
+  })
+
+  it('does not record a device sync time when the local commit throws (cloud-committed-locally-pending)', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    const realSetItem = localStorage.setItem.bind(localStorage)
+
+    localStorage.setItem = (key: string, value: string) => {
+      if (key === 'toothTargetPatients') {
+        throw new Error('quota exceeded (simulated)')
+      }
+      return realSetItem(key, value)
+    }
+
+    const result = await syncCloudNow()
+
+    expect(result.status).toBe('cloud-committed-locally-pending')
+    expect(getDeviceLastSyncAt()).toBeNull()
+
+    localStorage.setItem = realSetItem
+
+  })
+
+  it('prunes a tombstone older than the expiry window out of both the uploaded and committed documents', async () => {
+
+    const oldTombstone = makeTombstone({
+      id: 'ancient',
+      entityId: 'long-gone',
+      deletedAt: '2025-01-01T00:00:00.000Z',
+    })
+
+    const liveTombstone = makeTombstone({
+      id: 'recent',
+      entityId: 'recently-gone',
+      deletedAt: RECENTLY,
+    })
+
+    // Device syncs regularly, so the review gate never engages here -
+    // this test is purely about tombstone-age pruning.
+    recordDeviceSyncSuccess(RECENTLY)
+
+    seedLocalSynchronizedData({
+      tombstones: [oldTombstone, liveTombstone],
+    })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    await syncCloudNow()
+
+    const [writtenDocument] = mockedWrite.mock.calls[0]
+    expect(writtenDocument.deletionTombstones.map(t => t.id)).toEqual(['recent'])
+
+    const committedTombstones =
+      readKey<DeletionTombstone[]>('toothTargetDeletionTombstones')
+    expect(committedTombstones.map(t => t.id)).toEqual(['recent'])
+
+  })
+
+  it('end-to-end: a "kept" candidate reaches the cloud and a "discarded" one stays gone, after resuming with skipStaleReviewCheck', async () => {
+
+    recordDeviceSyncSuccess(LONG_AGO)
+
+    const keepMe = makePatient({ id: 'keep-me', patientNumber: 1 })
+    const discardMe = makePatient({ id: 'discard-me', patientNumber: 2 })
+
+    seedLocalSynchronizedData({ patients: [keepMe, discardMe] })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+
+    const gatedResult = await syncCloudNow()
+
+    expect(gatedResult.status).toBe('stale-review-required')
+
+    if (gatedResult.status !== 'stale-review-required') {
+      throw new Error('expected stale-review-required')
+    }
+
+    expect(
+      gatedResult.candidates.map(candidate => candidate.patientId).sort()
+    ).toEqual(['discard-me', 'keep-me'])
+
+    /*
+      The dentist reviews: "keep-me" is kept (no local write at all -
+      see App.tsx's keepStaleReviewPatient()); "discard-me" is
+      discarded, which App.tsx's confirmDiscardStaleReviewPatient()
+      implements via the app's NORMAL patient-deletion path
+      (deletePatientRecordAndCascade -> tombstone + local removal).
+      Simulated here directly against localStorage, the same shape that
+      production code leaves behind.
+    */
+    seedLocalSynchronizedData({
+      patients: [keepMe],
+      tombstones: [
+        makeTombstone({ entityType: 'patient', entityId: 'discard-me' }),
+      ],
+    })
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument(),
+      eTag: '"e1"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"e2"' })
+
+    const resumedResult = await syncCloudNow({ skipStaleReviewCheck: true })
+
+    expect(resumedResult.status).toBe('synced')
+
+    const [writtenDocument] = mockedWrite.mock.calls[0]
+    expect(writtenDocument.patients.map((p: Patient) => p.id)).toEqual(['keep-me'])
+
+    expect(
+      readKey<Patient[]>('toothTargetPatients').map(p => p.id)
+    ).toEqual(['keep-me'])
+
+    expect(getDeviceLastSyncAt()).toBe(NOW)
 
   })
 

@@ -301,10 +301,22 @@ function makeProcedure(overrides: Partial<Procedure> = {}): Procedure {
     name: 'Custom Procedure',
     isCustom: true,
     templateId: 'template-1',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   }
 }
 
+/*
+  deletedAt defaults to "right now" (Phase 4.7), not a fixed literal
+  date - these tests' own narratives always mean "a tombstone that was
+  JUST created" unless a test explicitly overrides deletedAt to
+  exercise tombstone-expiry pruning itself (see cloudSyncEngine.ts's
+  pruneExpiredTombstones() and this file's own expiry-specific tests),
+  so a fixed literal date would eventually - and, once real time simply
+  passes ~1 month past whatever date was hardcoded, silently - start
+  being pruned as "expired" by every OTHER test that never meant to
+  exercise expiry at all.
+*/
 function makeTombstone(
   overrides: Partial<DeletionTombstone> = {}
 ): DeletionTombstone {
@@ -312,7 +324,7 @@ function makeTombstone(
     id: 'tombstone-1',
     entityType: 'patient',
     entityId: 'patient-1',
-    deletedAt: '2026-01-01T00:00:00.000Z',
+    deletedAt: new Date().toISOString(),
     ...overrides,
   }
 }
@@ -999,6 +1011,196 @@ describe('custom procedure convergence', () => {
     expect(
       readKey<Procedure[]>('toothTargetProcedures').filter(p => p.isCustom)
     ).toEqual(directMerge.document.customProcedures)
+
+  })
+
+})
+
+/* ============================================================
+   9b. CUSTOM PROCEDURE CONCURRENT EDITING (Phase 5.5)
+   ============================================================ */
+
+describe('custom procedure concurrent editing - latest-updatedAt-wins', () => {
+
+  it('B wins when A is older than B', async () => {
+
+    const cloud = new FakeCloudFile()
+    wireTransportTo(cloud)
+
+    const older = makeProcedure({
+      id: 'proc-a',
+      name: 'Name A',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    const newer = makeProcedure({
+      id: 'proc-a',
+      name: 'Name B',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    })
+
+    const deviceA = new MemoryStorage()
+    useDevice(deviceA)
+    seedSynchronized({ procedures: [older] })
+    await syncCloudNow()
+
+    const deviceB = new MemoryStorage()
+    useDevice(deviceB)
+    seedSynchronized({ procedures: [newer] })
+    await syncCloudNow()
+
+    expect(
+      readKey<Procedure[]>('toothTargetProcedures').find(p => p.isCustom)
+    ).toEqual(newer)
+
+  })
+
+  it('the older version never overwrites newer content, regardless of sync order', async () => {
+
+    const cloud = new FakeCloudFile()
+    wireTransportTo(cloud)
+
+    const older = makeProcedure({
+      id: 'proc-a',
+      name: 'Name A',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    const newer = makeProcedure({
+      id: 'proc-a',
+      name: 'Name B',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    })
+
+    // Reversed order from the previous test - newer syncs first.
+    const deviceA = new MemoryStorage()
+    useDevice(deviceA)
+    seedSynchronized({ procedures: [newer] })
+    await syncCloudNow()
+
+    const deviceB = new MemoryStorage()
+    useDevice(deviceB)
+    seedSynchronized({ procedures: [older] })
+    await syncCloudNow()
+
+    expect(
+      readKey<Procedure[]>('toothTargetProcedures').find(p => p.isCustom)
+    ).toEqual(newer)
+
+  })
+
+})
+
+/* ============================================================
+   9c. PROCEDURE DELETION AND OFFLINE RESURRECTION PREVENTION
+   (Phase 5.5)
+   ============================================================ */
+
+describe('procedure deletion and offline resurrection prevention', () => {
+
+  it('a procedure tombstoned on one device never returns, and a past treatment that used it is completely unaffected', async () => {
+
+    const cloud = new FakeCloudFile()
+    wireTransportTo(cloud)
+
+    const procedure = makeProcedure({ id: 'proc-a' })
+
+    const patient = makePatient({ id: 'patient-x' })
+
+    const pastTreatment = makeSavedTreatment({
+      id: 'treatment-1',
+      patientId: 'patient-x',
+      procedureId: 'proc-a',
+      procedureName: procedure.name,
+    })
+
+    const deviceA = new MemoryStorage()
+    useDevice(deviceA)
+    seedSynchronized({
+      procedures: [procedure],
+      patients: [patient],
+      savedTreatments: [pastTreatment],
+    })
+    await syncCloudNow() // cloud now has the procedure, the patient, and the treatment
+
+    const deviceB = new MemoryStorage()
+    useDevice(deviceB)
+    seedSynchronized({
+      procedures: [procedure],
+      patients: [patient],
+      savedTreatments: [pastTreatment],
+    })
+    // Device B is offline at this point - it never syncs yet, it just
+    // has its own local copy (this is the "still has the old
+    // procedure locally" state).
+
+    // Device A deletes the procedure (a tombstone appears, exactly
+    // like App.tsx's deleteProcedureFromRegistry()) and syncs. The
+    // treatment is NOT touched.
+    useDevice(deviceA)
+    seedSynchronized({
+      procedures: [],
+      patients: [patient],
+      savedTreatments: [pastTreatment],
+      tombstones: [
+        makeTombstone({ entityType: 'procedure', entityId: 'proc-a' }),
+      ],
+    })
+    const resultA = await syncCloudNow()
+    expect(resultA.status).toBe('synced')
+    expect(cloud.peek()?.customProcedures).toEqual([])
+    expect(cloud.peek()?.savedTreatments).toEqual([pastTreatment])
+
+    // Device B comes back online and syncs - it still locally has the
+    // procedure.
+    useDevice(deviceB)
+    const resultB = await syncCloudNow()
+    expect(resultB.status).toBe('synced')
+
+    // The procedure never resurrects on device B...
+    expect(
+      readKey<Procedure[]>('toothTargetProcedures').filter(p => p.isCustom)
+    ).toEqual([])
+
+    // ...but device B's own copy of the past treatment is completely
+    // unaffected - same content, still there, still fully displayable.
+    expect(
+      readKey<SavedTreatment[]>('toothTargetSavedTreatments')
+    ).toEqual([pastTreatment])
+
+  })
+
+  it('deleting a procedure only removes it from the customProcedures list - it never touches savedTreatments, even when many treatments reference it', async () => {
+
+    const cloud = new FakeCloudFile()
+    wireTransportTo(cloud)
+
+    const procedure = makeProcedure({ id: 'proc-popular' })
+
+    const treatments = [
+      makeSavedTreatment({ id: 't1', procedureId: 'proc-popular' }),
+      makeSavedTreatment({ id: 't2', procedureId: 'proc-popular' }),
+      makeSavedTreatment({ id: 't3', procedureId: 'proc-popular' }),
+    ]
+
+    const device = new MemoryStorage()
+    useDevice(device)
+    seedSynchronized({
+      procedures: [procedure],
+      savedTreatments: treatments,
+    })
+    await syncCloudNow()
+
+    seedSynchronized({
+      procedures: [],
+      savedTreatments: treatments,
+      tombstones: [
+        makeTombstone({ entityType: 'procedure', entityId: 'proc-popular' }),
+      ],
+    })
+    const result = await syncCloudNow()
+
+    expect(result.status).toBe('synced')
+    expect(readKey<Procedure[]>('toothTargetProcedures').filter(p => p.isCustom)).toEqual([])
+    expect(readKey<SavedTreatment[]>('toothTargetSavedTreatments')).toEqual(treatments)
 
   })
 

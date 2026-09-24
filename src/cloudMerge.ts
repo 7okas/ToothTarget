@@ -32,33 +32,29 @@ import type { CloudSyncDocument } from './cloudSync'
   DECISIONS ON "SHOULD NEVER HAPPEN" CASES (documented, not invented)
   ============================================================
 
-  Only Procedure is still treated as create-only/immutable after
-  creation: created once via addProcedure() (isCustom: true,
-  crypto.randomUUID() id) and never edited afterward - there is no
-  procedure editor, and it carries no updatedAt field, so there is no
-  legitimate timestamp to compare even if two copies of the same id
-  ever did disagree.
+  Every mutable, synchronized entity - Patient (Phase 8), ProcedureTemplate
+  (Phase 2), SavedTreatment (Phase 4.6, once editing a completed
+  treatment's phase data became possible - see App.tsx's
+  confirmEditTreatmentPhases()), and Procedure (Phase 5.5, once
+  editing/deleting a procedure became possible - see App.tsx's
+  confirmEditProcedure()/deleteProcedureFromRegistry()) - carries a real
+  updatedAt, so genuine last-write-wins applies to all four via
+  pickWinningByUpdatedAt() below.
 
-  Because of that, this merge engine does NOT invent a "latest wins"
-  rule for procedures - there is no honest notion of "latest" for a
-  type that's never supposed to change. If the same id nonetheless
-  carries different data on the two sides (which the current app
-  should never itself produce - this would mean a manually edited
-  cloud file, corruption, or a future bug), resolveTie() below is used:
-  a deterministic, content-based tie-break that is symmetric regardless
-  of which side is passed as "local" vs "remote" (required for
-  merge(local, remote) === merge(remote, local)), and does not
-  fabricate a new identity or silently prefer either side by
-  convention. It has no opinion about which value is "right" - it only
-  guarantees one single, reproducible answer instead of a fabricated
-  timestamp, a random pick, or an argument-order-dependent pick.
-
-  Patient (Phase 8), ProcedureTemplate (Phase 2), and SavedTreatment
-  (Phase 4.6, once editing a completed treatment's phase data became
-  possible - see App.tsx's confirmEditTreatmentPhases()) each carry a
-  real updatedAt, so genuine last-write-wins applies to them via
-  pickWinningByUpdatedAt() below, with resolveTie() only as the
-  equal-updatedAt fallback.
+  resolveTie() below only ever runs as pickWinningByUpdatedAt()'s
+  equal-updatedAt fallback now - a deterministic, content-based
+  tie-break that is symmetric regardless of which side is passed as
+  "local" vs "remote" (required for merge(local, remote) ===
+  merge(remote, local)), and does not fabricate a new identity or
+  silently prefer either side by convention. It has no opinion about
+  which value is "right" - it only guarantees one single, reproducible
+  answer instead of a fabricated timestamp, a random pick, or an
+  argument-order-dependent pick. This matters most for the genuinely
+  rare "should never happen" case where two sides somehow carry the
+  exact same updatedAt but different content (a manually edited cloud
+  file, corruption, or a future bug) - normal same-id disagreements are
+  already resolved by whichever side's updatedAt is newer, before
+  resolveTie() is ever reached.
 
   patientNumberConflicts is computed from the FINAL surviving patient
   set (after tombstone suppression), not from the raw id-union: a
@@ -204,18 +200,14 @@ function unionById<T extends { id: string }>(
 
 /*
   Same-id resolution for a genuinely mutable, genuinely timestamped
-  entity - Phase 2's ProcedureTemplate.updatedAt, and (Phase 8)
-  Patient.updatedAt, added for the identical reason: patient-number
-  conflict resolution legitimately mutates an existing patient record,
-  so a same-id disagreement needs the same "newer updatedAt wins"
-  treatment templates already get, not the plain content-only
-  resolveTie() used for the genuinely create-only entities below
-  (savedTreatments/customProcedures). The newer valid updatedAt wins
-  outright; the winning record's updatedAt is never touched. Only when
-  both sides carry the exact same updatedAt (and, per resolveTie(),
-  only actually matters if the content also differs) is the
-  canonical-serialization tie-break used, exactly as section 10 of the
-  task specifies.
+  entity - used for all four synchronized entity types now that each
+  one (Patient, ProcedureTemplate, SavedTreatment, Procedure) carries
+  its own real updatedAt (see this file's own header comment for when
+  each one gained it). The newer valid updatedAt wins outright; the
+  winning record's updatedAt is never touched. Only when both sides
+  carry the exact same updatedAt (and, per resolveTie(), only actually
+  matters if the content also differs) is the canonical-serialization
+  tie-break used, exactly as section 10 of the task specifies.
 */
 
 function pickWinningByUpdatedAt<T extends { updatedAt: string }>(
@@ -283,6 +275,63 @@ function mergeTombstones(
     tombstoneKey,
     pickWinningTombstone
   )
+
+}
+
+/*
+  TOMBSTONE EXPIRY (Phase 4.7)
+
+  A tombstone only needs to outlive every device that might still be
+  carrying the record it deletes - once every device has seen it (or
+  simply synced at all since it was created), it has done its job and
+  can be dropped, so tombstones don't accumulate forever. ~1 month is
+  the same margin device-local staleness detection uses (see
+  deviceSyncTracking.ts's own STALE_DEVICE_THRESHOLD_MS, which
+  intentionally imports THIS constant rather than defining its own):
+  a device that syncs at least monthly is guaranteed to see a
+  tombstone before it could ever expire, and a device that hasn't
+  synced in over a month is exactly the case Phase 4.7's stale-record
+  review screen exists to protect - so tightening or loosening this
+  window should always move both behaviors together, not just one.
+
+  Deliberately NOT part of mergeCloudSyncDocuments() itself, which
+  stays pure with no notion of "now" (see this file's own header
+  comment) - pruning needs a real "now" to measure age against, so it
+  is exposed here as its own explicit-input pure function instead,
+  called by cloudSyncEngine.ts's orchestration layer (which already
+  legitimately uses `new Date()` elsewhere) at the points where a
+  merged document's tombstones are about to be written, either to the
+  cloud or to local storage.
+
+  A tombstone with a deletedAt that fails to parse as a date is kept,
+  never dropped - compareTimestamps()'s own NaN-vs-NaN never being
+  "greater than" maxAgeMs means an unparseable timestamp naturally
+  falls through to "not yet expired" here, the same fail-safe (never
+  destructively act on ambiguous input) every other timestamp
+  comparison in this file already follows.
+*/
+
+export const TOMBSTONE_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000
+
+export function pruneExpiredTombstones(
+  tombstones: DeletionTombstone[],
+  nowIso: string,
+  maxAgeMs: number = TOMBSTONE_EXPIRY_MS
+): DeletionTombstone[] {
+
+  const nowMs = Date.parse(nowIso)
+
+  return tombstones.filter(tombstone => {
+
+    const deletedAtMs = Date.parse(tombstone.deletedAt)
+
+    if (Number.isNaN(nowMs) || Number.isNaN(deletedAtMs)) {
+      return true
+    }
+
+    return nowMs - deletedAtMs <= maxAgeMs
+
+  })
 
 }
 
@@ -446,6 +495,12 @@ export function mergeCloudSyncDocuments(
       .map(tombstone => tombstone.entityId)
   )
 
+  const tombstonedProcedureIds = new Set(
+    mergedTombstones
+      .filter(tombstone => tombstone.entityType === 'procedure')
+      .map(tombstone => tombstone.entityId)
+  )
+
   /*
     PATIENTS - union by id, then tombstones win regardless of which
     side they came from (section 9): a patient present as a live
@@ -480,13 +535,12 @@ export function mergeCloudSyncDocuments(
     Phase 4.6 note: SavedTreatment gained an updatedAt field once
     editing a completed treatment's phase data became possible - before
     that, this module's own header comment correctly called this type
-    "create-only/immutable" and used the plain content-only resolveTie()
-    below (same as CUSTOM PROCEDURES still does, since Procedure has no
-    edit path and no updatedAt). Now that an edit is a real, intentional
-    mutation, it needs the identical "newer updatedAt wins" treatment
-    Patient/ProcedureTemplate already get, for the identical reason: a
-    same-id disagreement must prefer the edit over a stale pre-edit
-    copy, not an arbitrary content-based pick.
+    "create-only/immutable" and used the plain content-only resolveTie().
+    Now that an edit is a real, intentional mutation, it needs the
+    identical "newer updatedAt wins" treatment Patient/ProcedureTemplate
+    already get, for the identical reason: a same-id disagreement must
+    prefer the edit over a stale pre-edit copy, not an arbitrary
+    content-based pick.
   */
 
   const unionedSavedTreatments = unionById(
@@ -517,18 +571,37 @@ export function mergeCloudSyncDocuments(
   )
 
   /*
-    CUSTOM PROCEDURES - union by id only. No updatedAt exists on this
-    type and no tombstone entityType targets procedures at all (see
-    DeletionTombstone['entityType']), so no suppression pass applies
-    here - a dangling templateId/regionTemplateIds reference into a
-    tombstoned template is left exactly as-is, matching the existing
-    app's own tolerance for dangling template references.
+    CUSTOM PROCEDURES (Phase 5.5) - union by id with latest-updatedAt-
+    wins, then tombstones win regardless of side (section 9), same as
+    patients/templates now that Procedure carries a real updatedAt and
+    the 'procedure' tombstone entityType exists (see App.tsx's
+    confirmEditProcedure()/deleteProcedureFromRegistry()). A dangling
+    templateId/regionTemplateIds reference into a tombstoned template is
+    still left exactly as-is, matching the existing app's own tolerance
+    for dangling template references - suppression here is purely by
+    the procedure's OWN id, never by anything it references.
+
+    Critically, deleting a procedure ONLY ever removes/tombstones the
+    Procedure record itself - it never touches savedTreatments. A past
+    SavedTreatment already carries its own denormalized procedureName/
+    procedureId snapshot (set once, at the moment the treatment was
+    started - see App.tsx's startTreatment()) and is never re-resolved
+    against the live customProcedures list, so a treatment that used a
+    since-deleted procedure keeps displaying exactly as it always did,
+    on every device, forever. This merge engine has no code path that
+    could even do otherwise: survivingSavedTreatments above is filtered
+    only by tombstonedPatientIds/tombstonedTreatmentIds, never by
+    anything procedure-related.
   */
 
   const unionedProcedures = unionById(
     localDocument.customProcedures,
     remoteDocument.customProcedures,
-    resolveTie
+    pickWinningByUpdatedAt
+  )
+
+  const survivingProcedures = unionedProcedures.filter(
+    procedure => !tombstonedProcedureIds.has(procedure.id)
   )
 
   const document: CloudSyncDocument = {
@@ -548,7 +621,7 @@ export function mergeCloudSyncDocuments(
 
     customTemplates: [...survivingTemplates].sort(compareById),
 
-    customProcedures: [...unionedProcedures].sort(compareById),
+    customProcedures: [...survivingProcedures].sort(compareById),
 
     deletionTombstones: [...mergedTombstones].sort(compareTombstonesForOutput),
 

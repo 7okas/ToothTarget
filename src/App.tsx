@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react'
 import './App.css'
 import BackButton from './BackButton'
 import MicrosoftAccountSection from './MicrosoftAccountSection'
@@ -31,7 +31,14 @@ import {
 } from './patientNumberConflicts'
 import { planPatientDeletionCascade } from './patientDeletionCascade'
 import { applyPatientRenameToSavedTreatments } from './patientRenameCascade'
-import { requestCloudSync, requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
+import {
+  requestCloudSync,
+  requestCloudSyncIfSignedIn,
+  getPendingStaleReview,
+  subscribePendingStaleReview,
+  resumeSyncAfterStaleReview,
+} from './cloudSyncScheduler'
+import type { StaleReviewCandidate } from './staleRecordReview'
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
@@ -141,6 +148,22 @@ export type Procedure = {
     premolar: string
     molar: string
   }
+  /*
+    Phase 5.5 addition - added for the exact same reason
+    ProcedureTemplate/Patient/SavedTreatment each gained one: a
+    procedure record was "create-only/immutable" in every normal local
+    workflow until editing (confirmEditProcedure()) and deleting
+    (deleteProcedureFromRegistry()) a procedure became possible.
+    Without a real timestamp, cloudMerge.ts's same-id merge would have
+    no honest way to prefer an edit over a stale pre-edit copy still
+    sitting in the cloud. Set at creation (addProcedure()), bumped on
+    every edit; existing procedures missing it are backfilled once by
+    migrateProcedureTimestamps() (falling back to "now", the same
+    approximation migrateTemplateTimestamps() already uses for
+    templates, since a Procedure carries no other field an honest
+    historical value could be recovered from).
+  */
+  updatedAt: string
 }
 
 /*
@@ -201,22 +224,24 @@ export type Patient = {
 }
 
 /*
-  DELETION TOMBSTONES (multi-device sync foundation)
+  DELETION TOMBSTONES (multi-device sync)
 
-  Local-only record of "this Patient/ProcedureTemplate UUID was
-  deleted here" - not consulted or enforced anywhere yet (no cloud
-  merge exists yet), only recorded, so a future sync/merge step has
-  the information it needs to avoid resurrecting a deleted record
-  from another device instead of trying to retrofit that history
-  later. id is the tombstone's own identity (crypto.randomUUID()),
-  separate from entityId (the UUID of the thing that was deleted) -
-  deliberately carries no patient name or other descriptive content,
-  since a merge only ever needs to answer "was this UUID deleted?".
+  Record of "this Patient/ProcedureTemplate/SavedTreatment/Procedure
+  UUID was deleted here" - read by cloudMerge.ts's
+  mergeCloudSyncDocuments() on every sync to suppress a deleted record
+  from resurrecting via another device's still-live copy. id is the
+  tombstone's own identity (crypto.randomUUID()), separate from
+  entityId (the UUID of the thing that was deleted) - deliberately
+  carries no patient name or other descriptive content, since a merge
+  only ever needs to answer "was this UUID deleted?". 'procedure'
+  (Phase 5.5) is recorded by deleteProcedureFromRegistry() below,
+  mirroring exactly how 'procedureTemplate' is recorded by
+  deleteTemplateFromRegistry().
 */
 
 export type DeletionTombstone = {
   id: string
-  entityType: 'patient' | 'procedureTemplate' | 'treatment'
+  entityType: 'patient' | 'procedureTemplate' | 'treatment' | 'procedure'
   entityId: string
   deletedAt: string
 }
@@ -513,7 +538,22 @@ const BUILTIN_TEMPLATES: ProcedureTemplate[] = (
   ] satisfies Omit<ProcedureTemplate, 'updatedAt'>[]
 ).map(template => ({ ...template, updatedAt: BUILTIN_TEMPLATE_UPDATED_AT }))
 
-const BUILTIN_PROCEDURES: Procedure[] = [
+/*
+  Built-in procedures are static and never edited/deleted through the
+  normal edit/delete path (see confirmEditProcedure()/
+  requestDeleteProcedure()'s own isCustom guards below), so there's no
+  real "last edited" moment to record - one fixed timestamp is stamped
+  onto all of them purely to satisfy the shared Procedure type, the
+  exact same reasoning/pattern BUILTIN_TEMPLATE_UPDATED_AT already
+  established for BUILTIN_TEMPLATES. It's never read: built-ins are
+  never part of the cloud sync dataset (customProcedures only, see
+  cloudSync.ts) and are never included in a cloud backup either (see
+  createCloudBackup()'s isCustom filter).
+*/
+const BUILTIN_PROCEDURE_UPDATED_AT = '2024-01-01T00:00:00.000Z'
+
+const BUILTIN_PROCEDURES: Procedure[] = (
+  [
   {
     id: 'rct',
     name: 'RCT',
@@ -529,7 +569,8 @@ const BUILTIN_PROCEDURES: Procedure[] = [
   { id: 'sp', name: 'S&P', isCustom: false, templateId: 'sp-default' },
   { id: 'ext', name: 'Ext', isCustom: false, templateId: 'ext-default' },
   { id: 'irprep', name: 'IRPrep', isCustom: false, templateId: 'irprep-default' },
-]
+  ] satisfies Omit<Procedure, 'updatedAt'>[]
+).map(procedure => ({ ...procedure, updatedAt: BUILTIN_PROCEDURE_UPDATED_AT }))
 
 /*
   One-tap presets for the Quick Notes and Interruption logs on the
@@ -1829,16 +1870,80 @@ function migratePatientTimestamps(
 }
 
 /*
+  SAVED TREATMENT date MIGRATION (Phase 7 - statistics data-readiness
+  audit)
+
+  date is completeTreatment()'s own timestamp (see that function,
+  where it's set unconditionally) and has been required on
+  SavedTreatment since the type's very first version - unlike
+  updatedAt/completedAt below, nothing ever intentionally left it
+  unset. But nothing ever actually VERIFIED that either: the
+  legacy-shape fallback pass above backfills toothId, procedureName,
+  patientId, procedureId, templateId, templateName, phaseRecords,
+  totals, events, tags, chairEnteredAt/chairLeftAt for old records
+  missing them, but never included date - and cloudSync.ts's
+  isValidSyncSavedTreatment() doesn't check it either, so a treatment
+  that somehow reached this app with a missing/corrupted date would
+  sync and load without complaint, then silently misbehave anywhere
+  date is actually used (chronological sort, Statistics' date-range
+  filters and trend chart, migrateSavedTreatmentTimestamps() below,
+  which has always silently trusted date as an "always present"
+  fallback for a missing updatedAt).
+
+  No such record was found in this app's own data (every known write
+  path sets date unconditionally), but this closes the gap
+  defensively, the same way every other legacy field already does,
+  and runs BEFORE the updatedAt/completedAt migration below so that
+  migration's own "or date" fallback is never handed something
+  equally invalid. Fallback order mirrors createdAt's own reasoning in
+  migratePatientTimestamps(): prefer the closest honest historical
+  approximation - completedAt (the same moment date would have
+  recorded), then startedAt (still the right treatment, just an
+  earlier instant within it) - and only reach for "now" (a fabricated
+  date) if literally nothing else on the record is usable.
+*/
+
+function migrateSavedTreatmentDates(
+  treatments: SavedTreatment[]
+): { treatments: SavedTreatment[]; changed: boolean } {
+
+  let changed = false
+
+  const migratedTreatments = treatments.map(treatment => {
+
+    if (isValidUpdatedAtTimestamp(treatment.date)) {
+      return treatment
+    }
+
+    changed = true
+
+    const fallbackDate =
+      isValidUpdatedAtTimestamp(treatment.completedAt)
+        ? treatment.completedAt
+        : isValidUpdatedAtTimestamp(treatment.startedAt)
+          ? treatment.startedAt
+          : new Date().toISOString()
+
+    return { ...treatment, date: fallbackDate }
+
+  })
+
+  return { treatments: migratedTreatments, changed }
+
+}
+
+/*
   SAVED TREATMENT updatedAt MIGRATION (Phase 4.6 - cloud sync
   hardening, same reasoning as migratePatientTimestamps() above)
 
   A saved treatment missing a valid updatedAt (every one that existed
   before this field did) is backfilled using its own completedAt if
-  that's valid, or its date (always present, set at completion) as the
-  last-resort fallback - never "now", which would falsely claim a old
-  record was just edited. This runs as part of the same load-time
-  migration pipeline as the patientName backfill, over whatever that
-  pass already produced.
+  that's valid, or its date (guaranteed valid by
+  migrateSavedTreatmentDates() above, which now runs immediately
+  before this) as the last-resort fallback - never "now", which would
+  falsely claim a old record was just edited. This runs as part of the
+  same load-time migration pipeline as the patientName backfill, over
+  whatever that pass already produced.
 */
 
 function migrateSavedTreatmentTimestamps(
@@ -2183,6 +2288,64 @@ function readPersistedTemplates(): ProcedureTemplate[] {
   try {
 
     const raw = localStorage.getItem('toothTargetTemplates')
+
+    if (!raw) {
+      return []
+    }
+
+    const parsed = JSON.parse(raw)
+
+    return Array.isArray(parsed) ? parsed : []
+
+  } catch {
+
+    return []
+
+  }
+
+}
+
+/*
+  CUSTOM PROCEDURE updatedAt MIGRATION (Phase 5.5)
+
+  Exactly mirrors migrateTemplateTimestamps() above, for the identical
+  reason: existing procedures saved before Procedure.updatedAt existed
+  won't have it yet, and nothing else in a procedure's record (id,
+  name, isCustom, templateId, regionTemplateIds) carries any timestamp
+  a real historical edit time could be recovered from, so a missing/
+  invalid updatedAt is stamped with the current migration time - an
+  honest "first time this field existed" value, never a fabricated
+  edit history. A procedure that already carries a valid, non-empty
+  updatedAt string is returned completely untouched, so re-running this
+  on every load never overwrites a real prior edit time.
+*/
+function migrateProcedureTimestamps(
+  procedures: Procedure[]
+): { procedures: Procedure[]; changed: boolean } {
+
+  let changed = false
+
+  const migratedProcedures = procedures.map(procedure => {
+
+    if (isValidUpdatedAtTimestamp(procedure.updatedAt)) {
+      return procedure
+    }
+
+    changed = true
+
+    return { ...procedure, updatedAt: new Date().toISOString() }
+
+  })
+
+  return { procedures: migratedProcedures, changed }
+
+}
+
+function readPersistedProcedures(): Procedure[] {
+
+  try {
+
+    const raw = localStorage.getItem('toothTargetProcedures')
 
     if (!raw) {
       return []
@@ -2830,6 +2993,105 @@ async function deleteTemplateFromRegistry(
 
 }
 
+/*
+  CROSS-TAB SAFE CUSTOM PROCEDURE DELETION (Phase 5.5)
+
+  Mirrors CROSS-TAB SAFE CUSTOM TEMPLATE DELETION immediately above,
+  under its own lock name, for the identical reason a dedicated
+  template-deletion lock exists rather than reusing the patient one.
+  Only ever removes a procedure that is BOTH found in the current
+  persisted list AND isCustom === true - a built-in procedure (or a
+  procedure that's somehow already gone) is left completely untouched,
+  and no tombstone is created for it either, matching the UI (no
+  delete button is ever shown for a built-in procedure - see the
+  procedureSelect screen below).
+
+  CRITICAL: this only ever removes the Procedure record itself from
+  toothTargetProcedures and records a tombstone for that UUID - it
+  never reads, filters, or writes toothTargetSavedTreatments in any
+  way. A past treatment's procedureName/procedureId is a snapshot taken
+  once, at the moment the treatment was started (see startTreatment()
+  below), never re-resolved against the live procedures list, so
+  deleting a procedure can never change what an already-completed
+  treatment shows - it only removes that procedure from the list
+  offered when starting a NEW treatment (procedureSelect maps over
+  `procedures`, which this function's caller updates via setProcedures()
+  after a successful delete).
+*/
+
+const PROCEDURE_DELETION_LOCK_NAME = 'toothtarget-procedure-deletion'
+
+type ProcedureDeletionResult = {
+  procedures: Procedure[]
+  tombstones: DeletionTombstone[]
+  /*
+    True only when a custom procedure was actually removed (and its
+    tombstone recorded) - false for the "not found / not custom"
+    no-op case. Lets confirmDeleteProcedure() below request a cloud
+    sync only when the synchronized state genuinely changed.
+  */
+  deleted: boolean
+}
+
+function removeProcedureFromCurrentList(
+  procedureId: string
+): ProcedureDeletionResult {
+
+  const currentProcedures = readPersistedProcedures()
+
+  const procedureToDelete =
+    currentProcedures.find(procedure => procedure.id === procedureId)
+
+  if (!procedureToDelete || procedureToDelete.isCustom !== true) {
+
+    return {
+      procedures: currentProcedures,
+      tombstones: readPersistedTombstones(),
+      deleted: false,
+    }
+
+  }
+
+  const updatedProcedures =
+    currentProcedures.filter(procedure => procedure.id !== procedureId)
+
+  localStorage.setItem(
+    'toothTargetProcedures',
+    JSON.stringify(updatedProcedures)
+  )
+
+  const updatedTombstones =
+    appendTombstone('procedure', procedureId)
+
+  return {
+    procedures: updatedProcedures,
+    tombstones: updatedTombstones,
+    deleted: true,
+  }
+
+}
+
+async function deleteProcedureFromRegistry(
+  procedureId: string
+): Promise<ProcedureDeletionResult> {
+
+  if (
+    typeof navigator !== 'undefined' &&
+    'locks' in navigator &&
+    navigator.locks
+  ) {
+
+    return navigator.locks.request(
+      PROCEDURE_DELETION_LOCK_NAME,
+      () => removeProcedureFromCurrentList(procedureId)
+    )
+
+  }
+
+  return removeProcedureFromCurrentList(procedureId)
+
+}
+
 function App() {
 
   const [screen, setScreen] = useState<
@@ -2845,6 +3107,7 @@ function App() {
     | 'statistics'
     | 'treatmentSearch'
     | 'settings'
+    | 'staleReview'
   >('home')
 
   /*
@@ -3020,6 +3283,54 @@ const [conflictResolutionError, setConflictResolutionError] =
   useState<string | null>(null)
 
 /*
+  STALE-RECORD REVIEW (Phase 4.7)
+
+  pendingStaleReview itself is owned by cloudSyncScheduler.ts (see that
+  file's own pendingStaleReview store) - read here the same
+  useSyncExternalStore pattern SyncStatusIndicator.tsx/
+  StartupGateScreen.tsx already use for that module's status store, so
+  this component always reflects the current candidate list, including
+  one set from a sync that happened before this component even mounted.
+
+  staleReviewDecidedIds is this tab's own in-session bookkeeping of
+  which candidates the dentist has already decided (kept, or discarded
+  - a discard also removes the patient from savedPatients entirely, so
+  its own absence there would work too, but tracking ids explicitly
+  here keeps "kept" and "discarded" visually indistinguishable from the
+  review screen's own point of view: both simply leave the list).
+  Deliberately NOT persisted anywhere - if the dentist leaves mid-review
+  and the app reloads, the next sync attempt recomputes candidates fresh
+  from current local/cloud state and the review starts over, which is
+  simpler and safer than trying to resurrect a partial decision set
+  across a reload (see cloudSyncEngine.ts's own comment on why "kept"
+  decisions aren't persisted either).
+*/
+
+const pendingStaleReview = useSyncExternalStore(
+  subscribePendingStaleReview,
+  getPendingStaleReview
+)
+
+const [staleReviewDecidedIds, setStaleReviewDecidedIds] =
+  useState<Set<string>>(new Set())
+
+const [staleReviewDiscardTargetId, setStaleReviewDiscardTargetId] =
+  useState<string | null>(null)
+
+const [staleReviewActionError, setStaleReviewActionError] =
+  useState<string | null>(null)
+
+/*
+  True only while the dentist is viewing a patient's full record FROM
+  the review screen (requirement 5) - lets the Patient screen's own
+  BackButton return to the review screen instead of Home, without
+  touching backToHome() itself (used from many other places, all of
+  which should keep going to Home exactly as before).
+*/
+const [staleReviewReturnActive, setStaleReviewReturnActive] =
+  useState(false)
+
+/*
   Like toothTargetNextPatientNumber below, deletion tombstones are
   deliberately NOT kept in React state either - nothing displays them
   yet (no cloud merge/UI consumes them in this task), so a state that
@@ -3055,6 +3366,27 @@ const [conflictResolutionError, setConflictResolutionError] =
 
   const [newProcedureName, setNewProcedureName] =
     useState('')
+
+  /*
+    EDIT / DELETE PROCEDURE (Phase 5.5)
+
+    Same shape as the template row's own edit/delete UI state -
+    editProcedureId doubles as "is the edit modal open" (null means
+    closed), deleteProcedureConfirmId likewise for the delete-confirm
+    modal, both mirroring deleteTemplateConfirmId below.
+  */
+
+  const [editProcedureId, setEditProcedureId] =
+    useState<string | null>(null)
+
+  const [editProcedureName, setEditProcedureName] =
+    useState('')
+
+  const [editProcedureError, setEditProcedureError] =
+    useState<string | null>(null)
+
+  const [deleteProcedureConfirmId, setDeleteProcedureConfirmId] =
+    useState<string | null>(null)
 
   const [showDeleteConfirm, setShowDeleteConfirm] =
     useState(false)
@@ -3680,6 +4012,35 @@ const [conflictResolutionError, setConflictResolutionError] =
     }
 
     /*
+      CUSTOM PROCEDURE updatedAt MIGRATION (Phase 5.5)
+
+      Same reasoning/placement as the template timestamp migration just
+      above - runs before anything is committed to state/localStorage,
+      guarded on its own so a bug here can never prevent the
+      already-shaped procedures from still reaching the app. See
+      migrateProcedureTimestamps() above.
+    */
+
+    let procedureTimestampMigrationChanged = false
+
+    try {
+
+      const procedureTimestampResult =
+        migrateProcedureTimestamps(shapedProcedures)
+
+      shapedProcedures = procedureTimestampResult.procedures
+
+      procedureTimestampMigrationChanged = procedureTimestampResult.changed
+
+    } catch {
+
+      console.log(
+        'Could not migrate procedure timestamps.'
+      )
+
+    }
+
+    /*
       TREATMENT ID MIGRATION
 
       Runs before the patient-identity pass below (and before
@@ -3783,8 +4144,11 @@ const [conflictResolutionError, setConflictResolutionError] =
             )
           : null
 
+      const savedTreatmentDateResult =
+        migrateSavedTreatmentDates(savedTreatmentNameResult.treatments)
+
       const savedTreatmentTimestampResult =
-        migrateSavedTreatmentTimestamps(savedTreatmentNameResult.treatments)
+        migrateSavedTreatmentTimestamps(savedTreatmentDateResult.treatments)
 
       const finalSavedTreatments = savedTreatmentTimestampResult.treatments
       const finalIncompleteTreatments = incompleteTreatmentNameResult.treatments
@@ -3843,6 +4207,7 @@ const [conflictResolutionError, setConflictResolutionError] =
         savedTreatmentNameResult.changed ||
         incompleteTreatmentNameResult.changed ||
         (activeTreatmentNameResult?.changed ?? false) ||
+        savedTreatmentDateResult.changed ||
         savedTreatmentTimestampResult.changed
 
       setSavedPatients(finalPatients)
@@ -3974,7 +4339,11 @@ const [conflictResolutionError, setConflictResolutionError] =
     setTemplates(shapedTemplates)
     setProcedures(shapedProcedures)
 
-    if (templateProcedureIdMigrationChanged || templateTimestampMigrationChanged) {
+    if (
+      templateProcedureIdMigrationChanged ||
+      templateTimestampMigrationChanged ||
+      procedureTimestampMigrationChanged
+    ) {
 
       localStorage.setItem(
         'toothTargetTemplates',
@@ -4071,6 +4440,34 @@ const [conflictResolutionError, setConflictResolutionError] =
     real browser event, never synchronously during mount.
   */
   useEffect(() => attachOnlineRetryListener(), [])
+
+
+  /*
+    NAVIGATE TO THE STALE-RECORD REVIEW SCREEN (Phase 4.7)
+
+    Only ever auto-navigates while `screen === 'home'` - never yanks the
+    dentist away from an active treatment timer, an in-progress patient
+    edit, or anything else mid-workflow. This still reliably surfaces
+    the review the moment it's actually safe to: `screen` is in the
+    dependency list precisely so that landing back on Home later (after
+    finishing whatever the dentist was doing when the review first
+    became pending) re-runs this check and navigates then, rather than
+    only checking once at the instant pendingStaleReview first appears.
+    A dentist who never returns to Home still sees the warning banner
+    rendered on that screen (see the 'home' screen below) and can open
+    the review manually at any time in the meantime.
+  */
+  useEffect(() => {
+
+    if (
+      pendingStaleReview &&
+      pendingStaleReview.length > 0 &&
+      screen === 'home'
+    ) {
+      setScreen('staleReview')
+    }
+
+  }, [pendingStaleReview, screen])
 
 
   /*
@@ -4479,6 +4876,12 @@ async function openPatient(
 
     setPendingChairEnteredAt(null)
 
+    setEditProcedureId(null)
+
+    setEditProcedureError(null)
+
+    setDeleteProcedureConfirmId(null)
+
     setScreen('procedureSelect')
 
   }
@@ -4534,6 +4937,8 @@ async function openPatient(
 
       templateId: 'general',
 
+      updatedAt: new Date().toISOString(),
+
     }
 
     const updatedProcedures = [
@@ -4553,14 +4958,168 @@ async function openPatient(
     )
 
     /*
-      addProcedure() always creates a new isCustom: true record (there
-      is no existing edit/delete path for procedures in this app - see
-      this phase's own audit) - every successful call here is a
-      genuine synchronized-data change.
+      addProcedure() always creates a new isCustom: true record - every
+      successful call here is a genuine synchronized-data change.
     */
     requestCloudSync()
 
     selectProcedure(newProcedure)
+
+  }
+
+
+  /*
+    EDIT PROCEDURE (Phase 5.5)
+
+    Opens pre-filled with the procedure's CURRENT name (called from the
+    procedureSelect screen, which already has the record in scope).
+    Unlike patient editing, this has no cross-tab counter to protect
+    (procedures carry no number), so - exactly like saveTemplateDraft()
+    already does for templates - it reads/writes the in-memory
+    `procedures` state directly rather than re-reading fresh from
+    localStorage under a lock; the only locked procedure operation is
+    deletion (deleteProcedureFromRegistry() above), for the identical
+    reason template deletion alone is locked (removing an entry from a
+    shared list is the one operation genuinely at risk of a lost update
+    between tabs - editing a single record's own field in place is
+    not).
+  */
+
+  function requestEditProcedure(procedure: Procedure) {
+    setEditProcedureId(procedure.id)
+    setEditProcedureName(procedure.name)
+    setEditProcedureError(null)
+  }
+
+  function cancelEditProcedure() {
+    setEditProcedureId(null)
+    setEditProcedureError(null)
+  }
+
+  function confirmEditProcedure() {
+
+    if (!editProcedureId) {
+      return
+    }
+
+    const cleanName = editProcedureName.trim()
+
+    if (cleanName === '') {
+      setEditProcedureError('Procedure name cannot be empty.')
+      return
+    }
+
+    const existingProcedure =
+      procedures.find(procedure => procedure.id === editProcedureId)
+
+    if (!existingProcedure) {
+      setEditProcedureId(null)
+      setEditProcedureError(null)
+      return
+    }
+
+    /*
+      CRITICAL: this only ever updates the Procedure record itself -
+      it never touches toothTargetSavedTreatments. A past treatment's
+      procedureName is a snapshot taken once, at the moment the
+      treatment was started, and is deliberately NEVER cascaded/
+      rewritten by a later procedure rename - the same "historical
+      record stays exactly as it was" choice template editing already
+      makes (saveTemplateDraft() likewise never rewrites a past
+      treatment's templateName). Only a patient rename cascades to past
+      treatments (applyPatientRenameToSavedTreatments()), because a
+      patient's name is their ongoing identity, not a record of what a
+      long-past treatment was called at the time.
+    */
+
+    const updatedProcedure: Procedure = {
+      ...existingProcedure,
+      name: cleanName,
+      updatedAt: new Date().toISOString(),
+    }
+
+    const updatedProcedures =
+      procedures.map(procedure =>
+        procedure.id === editProcedureId
+          ? updatedProcedure
+          : procedure
+      )
+
+    setProcedures(updatedProcedures)
+
+    localStorage.setItem(
+      'toothTargetProcedures',
+      JSON.stringify(updatedProcedures)
+    )
+
+    requestCloudSync()
+
+    setEditProcedureId(null)
+    setEditProcedureError(null)
+
+    /*
+      Keep selectedProcedure in sync if the dentist is currently mid-
+      selection with the exact record just renamed (eg. reached the
+      editor from procedureSelect without yet moving on) - purely a
+      display nicety, never required for correctness elsewhere.
+    */
+    if (selectedProcedure?.id === updatedProcedure.id) {
+      setSelectedProcedure(updatedProcedure)
+    }
+
+  }
+
+
+  /*
+    DELETE PROCEDURE (Phase 5.5)
+
+    Two-step, explicit-confirmation flow, matching the app's existing
+    "confirm before delete" pattern (requestDeleteTemplate()/
+    confirmDeleteTemplate(), requestDeletePatient()/confirmDeletePatient()).
+    deleteProcedureFromRegistry() re-reads the registry fresh under the
+    cross-tab deletion lock - see that function's own header comment
+    for why this, unlike editing, needs to be locked and re-read fresh.
+  */
+
+  function requestDeleteProcedure(procedureId: string) {
+    setDeleteProcedureConfirmId(procedureId)
+  }
+
+  function cancelDeleteProcedure() {
+    setDeleteProcedureConfirmId(null)
+  }
+
+  async function confirmDeleteProcedure() {
+
+    if (!deleteProcedureConfirmId) {
+      return
+    }
+
+    const registryResult =
+      await deleteProcedureFromRegistry(deleteProcedureConfirmId)
+
+    setProcedures(registryResult.procedures)
+
+    /*
+      Only requested when a custom procedure was genuinely removed -
+      skipped for the no-op "already gone / somehow not custom" case,
+      exactly mirroring confirmDeleteTemplate()'s own guard.
+    */
+    if (registryResult.deleted) {
+      requestCloudSync()
+    }
+
+    /*
+      If the just-deleted procedure was the one currently selected
+      (eg. reached via a stale reference from a previous render), clear
+      it so a subsequent screen never tries to start a treatment
+      against a procedure that no longer exists.
+    */
+    if (selectedProcedure?.id === deleteProcedureConfirmId) {
+      setSelectedProcedure(null)
+    }
+
+    setDeleteProcedureConfirmId(null)
 
   }
 
@@ -6345,15 +6904,40 @@ async function openPatient(
     setDeletePatientBlockedReason(null)
   }
 
-  async function confirmDeletePatient() {
+  /*
+    SHARED PATIENT-DELETION CORE (Phase 4.7 extraction)
 
-    const nameToDelete =
-      selectedPatient.toLowerCase()
+    Everything confirmDeletePatient() below used to do inline, minus the
+    three UI-only concerns that differ by caller (closing whichever
+    confirm modal is open, clearing selectedHistoryTreatment, and which
+    screen to land on afterward) - factored out so
+    confirmDiscardStaleReviewPatient() (the review screen's "Discard"
+    action) can reuse the EXACT same cascade-plan/tombstone/sync logic
+    a normal patient deletion already uses, per this phase's own
+    requirement that discarding "behave like a normal deletion", not a
+    second, parallel implementation of it. Takes an explicit id/name
+    pair rather than reading `selectedPatient` itself, since the review
+    screen's caller already knows exactly which candidate it's acting
+    on and has no dependency on which patient (if any) is currently
+    open on the Patient screen.
+  */
+
+  async function deletePatientRecordAndCascade(
+    patientIdToDelete: string | undefined,
+    nameToDelete: string
+  ): Promise<
+    | { blocked: true; reason: string }
+    | { blocked: false; deleted: boolean }
+  > {
+
+    const lowercasedNameToDelete = nameToDelete.toLowerCase()
 
     const patientToDelete =
-      savedPatients.find(
-        patient => patient.name.toLowerCase() === nameToDelete
-      )
+      patientIdToDelete
+        ? savedPatients.find(patient => patient.id === patientIdToDelete)
+        : savedPatients.find(
+            patient => patient.name.toLowerCase() === lowercasedNameToDelete
+          )
 
     /*
       CASCADE PLAN (Phase 4.5)
@@ -6373,21 +6957,15 @@ async function openPatient(
         patientToDelete
           ? { id: patientToDelete.id, name: patientToDelete.name }
           : undefined,
-      nameToDelete,
+      nameToDelete: lowercasedNameToDelete,
       savedTreatments: readPersistedSavedTreatments(),
       incompleteTreatments: readPersistedIncompleteTreatments(),
       activeTreatment: readPersistedActiveTreatment(),
     })
 
     if (cascadePlan.blocked) {
-
-      setDeletePatientBlockedReason(cascadePlan.reason)
-
-      return
-
+      return { blocked: true, reason: cascadePlan.reason }
     }
-
-    setDeletePatientBlockedReason(null)
 
     /*
       PATIENT REGISTRY
@@ -6476,11 +7054,151 @@ async function openPatient(
       requestCloudSync()
     }
 
+    return { blocked: false, deleted: registryResult?.deleted ?? false }
+
+  }
+
+  async function confirmDeletePatient() {
+
+    const result =
+      await deletePatientRecordAndCascade(undefined, selectedPatient)
+
+    if (result.blocked) {
+
+      setDeletePatientBlockedReason(result.reason)
+
+      return
+
+    }
+
+    setDeletePatientBlockedReason(null)
+
     setShowDeleteConfirm(false)
 
     setSelectedHistoryTreatment(null)
 
     backToHome()
+
+  }
+
+  /*
+    STALE-RECORD REVIEW SCREEN (Phase 4.7)
+
+    See this file's own pendingStaleReview/staleReviewDecidedIds state
+    comments above for the overall design. "View Full Record" reuses
+    the existing Patient screen wholesale (requirement 5 - complete
+    treatment history, not a second, cut-down summary view) rather than
+    building a separate read-only viewer; the only new behavior needed
+    is remembering to come back HERE instead of Home afterward.
+  */
+
+  function viewStaleReviewPatientRecord(candidate: StaleReviewCandidate) {
+
+    setSelectedPatient(candidate.name)
+
+    setPatientSearch(candidate.name)
+
+    setStaleReviewReturnActive(true)
+
+    setScreen('patient')
+
+  }
+
+  function returnFromStaleReviewPatientView() {
+
+    setStaleReviewReturnActive(false)
+
+    setScreen('staleReview')
+
+  }
+
+  /*
+    "Keep" writes nothing at all - the patient simply stays exactly as
+    it already is, a completely normal local patient, and reaches the
+    cloud the ordinary way on the resumed sync finishStaleReview()
+    triggers. Only this tab's own in-session decision bookkeeping is
+    updated, so the review list stops asking about it again.
+  */
+  function keepStaleReviewPatient(patientId: string) {
+
+    setStaleReviewActionError(null)
+
+    setStaleReviewDecidedIds(previous => {
+      const next = new Set(previous)
+      next.add(patientId)
+      return next
+    })
+
+  }
+
+  function requestDiscardStaleReviewPatient(patientId: string) {
+    setStaleReviewActionError(null)
+    setStaleReviewDiscardTargetId(patientId)
+  }
+
+  function cancelDiscardStaleReviewPatient() {
+    setStaleReviewDiscardTargetId(null)
+  }
+
+  /*
+    Reuses deletePatientRecordAndCascade() - the exact same cascade
+    plan, tombstone, and requestCloudSync() a normal patient deletion
+    already uses (requirement 6: discarding must behave like a real
+    deletion, not a silent removal). The active-treatment block can, in
+    principle, still fire here (a candidate patient could have picked up
+    a fresh active treatment on this device since the review began) -
+    surfaced as an inline error on the review screen rather than losing
+    the dentist's "discard" decision silently.
+  */
+  async function confirmDiscardStaleReviewPatient() {
+
+    const candidate =
+      (pendingStaleReview ?? []).find(
+        item => item.patientId === staleReviewDiscardTargetId
+      )
+
+    setStaleReviewDiscardTargetId(null)
+
+    if (!candidate) {
+      return
+    }
+
+    const result =
+      await deletePatientRecordAndCascade(candidate.patientId, candidate.name)
+
+    if (result.blocked) {
+      setStaleReviewActionError(result.reason)
+      return
+    }
+
+    setStaleReviewActionError(null)
+
+    setStaleReviewDecidedIds(previous => {
+      const next = new Set(previous)
+      next.add(candidate.patientId)
+      return next
+    })
+
+  }
+
+  /*
+    Called once every candidate has been kept or discarded. Resets this
+    tab's own decision bookkeeping (nothing left to remember - the next
+    stale episode, if one ever happens again, starts from a clean
+    slate) and hands off to resumeSyncAfterStaleReview()
+    (cloudSyncScheduler.ts), which clears the pending review and
+    requests exactly one more sync attempt that skips the gate this
+    review just satisfied.
+  */
+  function finishStaleReview() {
+
+    setStaleReviewDecidedIds(new Set())
+
+    setStaleReviewActionError(null)
+
+    resumeSyncAfterStaleReview()
+
+    setScreen('home')
 
   }
 
@@ -7497,6 +8215,29 @@ async function openPatient(
         )}
 
 
+        {pendingStaleReview && pendingStaleReview.length > 0 && (
+
+          <div className="patient-conflict-banner-container">
+
+            <button
+              type="button"
+              className="patient-conflict-banner"
+              onClick={() => setScreen('staleReview')}
+            >
+              ⚠ Review needed before syncing can continue (
+              {
+                pendingStaleReview.filter(
+                  candidate => !staleReviewDecidedIds.has(candidate.patientId)
+                ).length
+              }
+              )
+            </button>
+
+          </div>
+
+        )}
+
+
         <div className="manage-templates-link">
 
           <button
@@ -7974,7 +8715,13 @@ const patientTreatments =
 
         <div className="top-header">
 
-          <BackButton onClick={backToHome} />
+          <BackButton
+            onClick={
+              staleReviewReturnActive
+                ? returnFromStaleReviewPatientView
+                : backToHome
+            }
+          />
 
           <div className="title-block">
             <h1>
@@ -8472,24 +9219,70 @@ const patientTreatments =
 
         <div className="procedure-page">
 
-          <div className="patient-list">
+          <div className="template-list">
 
             {procedures.map(
               procedure => (
 
-                <button
-                  key={procedure.id}
-                  type="button"
-                  className="patient-list-item"
-                  onClick={() =>
-                    selectProcedure(procedure)
-                  }
-                >
-                  {procedure.name}
-                </button>
+                <div className="template-row" key={procedure.id}>
+
+                  <button
+                    type="button"
+                    className="template-row-main"
+                    onClick={() =>
+                      selectProcedure(procedure)
+                    }
+                  >
+                    <span className="template-row-title">
+                      <span className="template-row-name">
+                        {procedure.name}
+                      </span>
+                      {!procedure.isCustom && (
+                        <span className="template-badge">
+                          Built-in
+                        </span>
+                      )}
+                    </span>
+                  </button>
+
+                  {procedure.isCustom && (
+
+                    <div className="template-row-actions">
+
+                      <button
+                        type="button"
+                        className="small-button"
+                        title="Edit this procedure"
+                        onClick={() =>
+                          requestEditProcedure(procedure)
+                        }
+                      >
+                        ✎
+                      </button>
+
+                      <button
+                        type="button"
+                        className="small-button"
+                        title="Delete this procedure"
+                        onClick={() =>
+                          requestDeleteProcedure(procedure.id)
+                        }
+                      >
+                        ×
+                      </button>
+
+                    </div>
+
+                  )}
+
+                </div>
 
               )
             )}
+
+          </div>
+
+          <div className="patient-list">
 
             {!showAddProcedure && (
 
@@ -8541,6 +9334,101 @@ const patientTreatments =
           )}
 
         </div>
+
+
+        {editProcedureId && (
+
+          <div className="modal-overlay">
+
+            <div className="modal-card">
+
+              <h2>
+                Edit Procedure
+              </h2>
+
+              {editProcedureError && (
+                <p className="settings-error-message">
+                  {editProcedureError}
+                </p>
+              )}
+
+              <input
+                type="text"
+                placeholder="Procedure name..."
+                value={editProcedureName}
+                onChange={
+                  event =>
+                    setEditProcedureName(event.target.value)
+                }
+                autoFocus
+              />
+
+              <div className="modal-actions">
+
+                <button
+                  type="button"
+                  onClick={cancelEditProcedure}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={confirmEditProcedure}
+                >
+                  Save
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        )}
+
+
+        {deleteProcedureConfirmId && (
+
+          <div className="modal-overlay">
+
+            <div className="modal-card">
+
+              <h2>
+                Delete this procedure?
+              </h2>
+
+              <p>
+                This removes only this procedure from the list offered
+                when starting new treatments. Past treatments that
+                already used it are not affected and keep displaying
+                exactly as before. This action cannot be undone.
+              </p>
+
+              <div className="modal-actions">
+
+                <button
+                  type="button"
+                  onClick={cancelDeleteProcedure}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  className="button-danger"
+                  onClick={confirmDeleteProcedure}
+                >
+                  Delete
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        )}
 
       </div>
 
@@ -10698,6 +11586,184 @@ const patientTreatments =
           ))}
 
         </div>
+
+      </div>
+
+    )
+
+  }
+
+
+  if (screen === 'staleReview') {
+
+    const candidates = pendingStaleReview ?? []
+
+    const remainingCandidates = candidates.filter(
+      candidate => !staleReviewDecidedIds.has(candidate.patientId)
+    )
+
+    const staleReviewDiscardTarget =
+      staleReviewDiscardTargetId
+        ? candidates.find(
+            candidate => candidate.patientId === staleReviewDiscardTargetId
+          ) ?? null
+        : null
+
+    return (
+
+      <div className="app">
+
+        <div className="top-header">
+
+          <BackButton onClick={backToHome} />
+
+          <div className="title-block">
+            <h1>
+              Review Before Syncing
+            </h1>
+          </div>
+
+          <div className="top-header-spacer" />
+
+        </div>
+
+
+        <div className="procedure-page">
+
+          <p>
+            This device hasn't synced to the cloud in over a month.
+            The patients below were added on this device but have
+            never reached the cloud, and none are marked for deletion.
+            Review each one - keep it to sync it normally, or discard
+            it if it shouldn't be kept - before syncing continues.
+          </p>
+
+          {staleReviewActionError && (
+            <p className="conflict-resolution-error">
+              {staleReviewActionError}
+            </p>
+          )}
+
+          {remainingCandidates.length === 0 ? (
+
+            <>
+
+              <p className="empty-message">
+                All patients reviewed.
+              </p>
+
+              <button
+                type="button"
+                onClick={finishStaleReview}
+              >
+                Continue Syncing
+              </button>
+
+            </>
+
+          ) : (
+
+            remainingCandidates.map(candidate => (
+
+              <div
+                className="treatment-card incomplete-treatment"
+                key={candidate.patientId}
+              >
+
+                <div>
+
+                  <strong>
+                    #{candidate.patientNumber} — {candidate.name}
+                  </strong>
+
+                  <p>
+                    {candidate.completedTreatmentCount} completed
+                    treatment{candidate.completedTreatmentCount === 1 ? '' : 's'}
+                  </p>
+
+                  <small>
+                    Last edited {formatDate(candidate.lastEditedAt)}
+                  </small>
+
+                </div>
+
+                <div className="incomplete-treatment-actions">
+
+                  <button
+                    type="button"
+                    onClick={() => viewStaleReviewPatientRecord(candidate)}
+                  >
+                    View Full Record
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => keepStaleReviewPatient(candidate.patientId)}
+                  >
+                    Keep
+                  </button>
+
+                  <button
+                    type="button"
+                    className="button-danger"
+                    onClick={
+                      () => requestDiscardStaleReviewPatient(candidate.patientId)
+                    }
+                  >
+                    Discard
+                  </button>
+
+                </div>
+
+              </div>
+
+            ))
+
+          )}
+
+        </div>
+
+
+        {staleReviewDiscardTarget && (
+
+          <div className="modal-overlay">
+
+            <div className="modal-card">
+
+              <h2>
+                Discard {staleReviewDiscardTarget.name}?
+              </h2>
+
+              <p>
+                This removes the patient and their treatment history
+                from this device, the same as deleting them normally.
+                This action cannot be undone.
+              </p>
+
+              <div className="modal-actions">
+
+                <button
+                  type="button"
+                  onClick={cancelDiscardStaleReviewPatient}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  className="button-danger"
+                  onClick={confirmDiscardStaleReviewPatient}
+                >
+                  Discard
+                </button>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        )}
 
       </div>
 

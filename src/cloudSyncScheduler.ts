@@ -1,4 +1,6 @@
 import { syncCloudNow, type CloudSyncResult } from './cloudSyncEngine'
+import type { StaleReviewCandidate } from './staleRecordReview'
+import { classifySyncOutcome, type SyncOutcomeReason } from './syncOutcome'
 
 /*
   CLOUD SYNC SCHEDULER (Phase 7 - integration)
@@ -74,6 +76,15 @@ let pending = false
 let microtaskQueued = false
 
 /*
+  Consumed by exactly one sync attempt - see resumeSyncAfterStaleReview()
+  below and PerformSyncOptions's own comment in cloudSyncEngine.ts for
+  the full reasoning. Read-and-cleared at the moment an attempt actually
+  starts (inside startIfIdle(), not when it's set), so it can never leak
+  into a later, unrelated attempt.
+*/
+let skipStaleReviewCheckOnce = false
+
+/*
   MINIMAL STATUS (Phase 7 - for the existing Microsoft Account section
   only, see MicrosoftAccountSection.tsx)
 
@@ -136,6 +147,98 @@ function isSuccessStatus(result: CloudSyncResult): boolean {
   return result.status === 'synced' || result.status === 'synced-with-conflicts'
 }
 
+/*
+  STALE-RECORD REVIEW (Phase 4.7)
+
+  A separate store from `status` above, the same relationship
+  patientNumberConflicts already has to the coarse sync status
+  elsewhere in this app (App.tsx's own patientNumberConflicts state):
+  'stale-review-required' collapses into the plain 'unavailable' status
+  for the small persistent indicator's coarse state machine, while this
+  dedicated store carries the actual candidate list a real review
+  screen needs. null means "no review currently pending"; a non-null
+  (possibly empty, though performSync() never actually returns one
+  empty) array means the dentist has something to decide before this
+  device's sync can proceed. (Phase 6 note: SyncStatusIndicator.tsx now
+  DOES read a review-needed reason out of lastSyncOutcome below, for
+  its own short badge text - that's presentation only, layered on top
+  of this store, which remains the one source of truth for the actual
+  candidate list and the review screen/banner built around it.)
+*/
+
+let pendingStaleReview: StaleReviewCandidate[] | null = null
+
+const staleReviewListeners = new Set<() => void>()
+
+function setPendingStaleReview(candidates: StaleReviewCandidate[] | null): void {
+
+  pendingStaleReview = candidates
+
+  for (const listener of staleReviewListeners) {
+    listener()
+  }
+
+}
+
+export function getPendingStaleReview(): StaleReviewCandidate[] | null {
+  return pendingStaleReview
+}
+
+export function subscribePendingStaleReview(listener: () => void): () => void {
+
+  staleReviewListeners.add(listener)
+
+  return () => {
+    staleReviewListeners.delete(listener)
+  }
+
+}
+
+/*
+  LAST SYNC OUTCOME (Phase 6 - failure differentiation)
+
+  Same get/subscribe module-store pattern as `status` and
+  pendingStaleReview above - this is the one addition Phase 6 makes to
+  this file. Every sync attempt that actually resolves (success or any
+  failure mode alike - see syncOutcome.ts's classifySyncOutcome(),
+  which is exhaustive over every CloudSyncResult status) updates this
+  to the freshly classified reason, so a caller reading it always has
+  the most recent, specific outcome rather than a generic pass/fail
+  flag. null only before this device's very first sync attempt this
+  session has resolved at all - SyncStatusIndicator.tsx pairs this with
+  the SAME status-transition ("did a sync attempt just finish?") logic
+  it already used before this phase, so this store answers "what
+  happened" while `status` still answers "is one happening right now".
+*/
+
+let lastSyncOutcome: SyncOutcomeReason | null = null
+
+const syncOutcomeListeners = new Set<() => void>()
+
+function setLastSyncOutcome(reason: SyncOutcomeReason): void {
+
+  lastSyncOutcome = reason
+
+  for (const listener of syncOutcomeListeners) {
+    listener()
+  }
+
+}
+
+export function getLastSyncOutcome(): SyncOutcomeReason | null {
+  return lastSyncOutcome
+}
+
+export function subscribeLastSyncOutcome(listener: () => void): () => void {
+
+  syncOutcomeListeners.add(listener)
+
+  return () => {
+    syncOutcomeListeners.delete(listener)
+  }
+
+}
+
 function scheduleFlush(): void {
 
   if (microtaskQueued) {
@@ -170,13 +273,38 @@ function startIfIdle(): void {
   pending = false
   running = true
 
+  const skipStaleReviewCheck = skipStaleReviewCheckOnce
+  skipStaleReviewCheckOnce = false
+
   setStatus('syncing')
 
-  syncCloudNow()
+  syncCloudNow(skipStaleReviewCheck ? { skipStaleReviewCheck: true } : undefined)
     .then(
       result => {
+
         logSyncOutcome(result)
+
+        /*
+          Phase 6 - classified BEFORE the stale-review branch below, so
+          lastSyncOutcome reflects every resolved attempt uniformly
+          (including 'review-needed' itself), not just the ones that
+          reached a normal success/failure.
+        */
+        setLastSyncOutcome(classifySyncOutcome(result))
+
+        /*
+          A gated attempt never reached the cloud at all (see
+          cloudSyncEngine.ts's own gate comment) - surface its candidate
+          list to whatever's watching pendingStaleReview and treat it as
+          a non-success for status purposes, same as any other attempt
+          that didn't actually complete.
+        */
+        if (result.status === 'stale-review-required') {
+          setPendingStaleReview(result.candidates)
+        }
+
         return isSuccessStatus(result)
+
       },
       () => {
         /*
@@ -229,6 +357,30 @@ export function requestCloudSync(): void {
 }
 
 /*
+  Call this once the dentist has finished a stale-record review (every
+  candidate in pendingStaleReview has been kept or discarded - see
+  App.tsx's own staleReview screen). Clears the pending review
+  immediately (optimistic - the review UI should disappear the moment
+  the dentist finishes, not wait for the next sync to resolve) and
+  requests exactly one more sync attempt that skips the stale-review
+  gate, via the same coalescing machinery requestCloudSync() already
+  uses - this is deliberately NOT a separate code path, so a decision
+  made here composes correctly with any other mutation that happens to
+  land in the same microtask (eg. a discard, which itself already calls
+  requestCloudSync() through the app's normal patient-deletion flow).
+*/
+
+export function resumeSyncAfterStaleReview(): void {
+
+  setPendingStaleReview(null)
+
+  skipStaleReviewCheckOnce = true
+
+  requestCloudSync()
+
+}
+
+/*
   Call this from a trigger that has no synchronized-data mutation of
   its own to report - app load, and a fresh Microsoft sign-in (see
   App.tsx's post-migration effect and MicrosoftAccountSection.tsx's
@@ -260,4 +412,7 @@ export function __resetCloudSyncSchedulerForTests(): void {
   pending = false
   microtaskQueued = false
   status = 'idle'
+  skipStaleReviewCheckOnce = false
+  pendingStaleReview = null
+  lastSyncOutcome = null
 }
