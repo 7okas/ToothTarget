@@ -7833,10 +7833,6 @@ async function openPatient(
             className="home-logo"
           />
 
-          <p>
-            Dental procedure timing
-          </p>
-
         </div>
 
 

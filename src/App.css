@@ -156,11 +156,12 @@ a:focus-visible,
 
 .home-logo {
   /*
-    Phase 8 - sized up now that this is the ONLY branding on the
-    home screen (the "ToothTarget" text title was removed since the
-    wordmark is already part of the logo image itself).
+    Phase 8 sized this up to 96px now that it's the ONLY branding on
+    the home screen; sized up again here (the "Dental procedure
+    timing" subtitle that used to sit underneath it is gone too now)
+    since the logo is effectively the screen's whole header.
   */
-  height: 96px;
+  height: 132px;
   width: auto;
   margin-bottom: var(--space-2);
 }
@@ -893,28 +894,40 @@ button:disabled:hover {
 =========================== */
 
 .home-nav-grid {
+  /*
+    Single row of 4 (was a 2x2 grid) - at this container's own
+    max-width (600px, matching the search bar directly below it) each
+    column is a comfortable ~140px even at the tightest realistic iPad
+    width (744px portrait, iPad mini), since --space-8's page padding
+    plus this cap already keep the grid well under the viewport width
+    on every iPad size/orientation. Falls back to the original 2x2
+    layout below 520px - see the RESPONSIVE section's existing phone
+    breakpoint - for any viewport narrow enough that 4 columns would
+    genuinely be too cramped to tap comfortably.
+  */
   max-width: 600px;
   margin: 0 auto var(--space-6) auto;
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-4);
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
 }
 
 .home-nav-grid button {
   /*
-    Phase 8 - sized to fit its own icon+label content (min-height: 0
-    overrides the base <button> rule's control-height floor) rather
-    than a fixed card height, and slightly smaller/tighter than the
-    original card treatment.
+    Phase 8 sized this to fit its own icon+label content (min-height:
+    0 overrides the base <button> rule's control-height floor) rather
+    than a fixed card height. Padding/icon/label size were shrunk
+    again here for the single-row 4-column layout above.
   */
   flex-direction: column;
   min-height: 0;
   background: var(--color-surface-alt);
   color: var(--color-ink);
   border-radius: var(--radius-md);
-  padding: var(--space-4) var(--space-3);
+  padding: var(--space-3) var(--space-1);
   gap: var(--space-1);
-  font-size: var(--text-xs);
+  font-size: 11px;
+  line-height: 1.2;
   font-weight: var(--weight-medium);
   white-space: normal;
   text-align: center;
@@ -925,7 +938,7 @@ button:disabled:hover {
 }
 
 .home-nav-icon {
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
 }
 
@@ -1283,11 +1296,13 @@ button:disabled:hover {
 
 .startup-gate-logo {
   /*
-    Phase 8 - sized up now that "Welcome back" was removed and the
-    logo (which already carries the wordmark) is the primary visual
-    on this screen instead of a small accent above a heading.
+    Phase 8 sized this up to 88px now that "Welcome back" was removed
+    and the logo (which already carries the wordmark) is the primary
+    visual on this screen; sized up again here for the same reason.
+    .startup-gate-card's own max-height + overflow-y: auto (below)
+    already keeps this safe on a short viewport.
   */
-  height: 88px;
+  height: 120px;
   width: auto;
 }
 
@@ -1721,6 +1736,18 @@ button:disabled:hover {
 
 /* ===========================
    Patient list
+
+   No custom scrollbar styling here on purpose (checked against item
+   5's own request for an "iOS-style thin, rounded, translucent" list
+   scrollbar): WKWebView/Safari on iOS - this app's actual target
+   platform - never honors ::-webkit-scrollbar styling on an ordinary
+   overflow: auto element in the first place; it always draws its own
+   native thin, rounded, translucent, edge-hugging overlay indicator
+   for a touch-scrolled container regardless of what CSS is written
+   here, and that native indicator already IS exactly this look. Custom
+   ::-webkit-scrollbar rules would only ever take effect in a desktop
+   WebKit/Blink browser (Chrome/Edge/desktop Safari) - not the real
+   target device - so none were added.
 =========================== */
 
 .patient-list {
@@ -2672,5 +2699,26 @@ button:disabled:hover {
 
   .quick-chip-row {
     gap: var(--space-1);
+  }
+
+  /*
+    The 4-column single-row home nav (see .home-nav-grid's own
+    comment) is sized for iPad; below this width, fall back to the
+    original 2x2 grid + larger icon/label/padding rather than
+    shrinking 4 columns further into an uncomfortably small tap
+    target.
+  */
+  .home-nav-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-4);
+  }
+
+  .home-nav-grid button {
+    padding: var(--space-4) var(--space-3);
+    font-size: var(--text-xs);
+  }
+
+  .home-nav-icon {
+    font-size: 22px;
   }
 }
