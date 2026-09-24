@@ -154,6 +154,19 @@ a:focus-visible,
   text-align: center;
 }
 
+/*
+  Home screen only - the logo is the entire header (no title/subtitle
+  below it any more, see .home-logo's own comment), so the generous
+  .header margin-bottom meant for separating a title block from page
+  content below left a disproportionately wide gap before the nav
+  grid. Tightened independently of .header so the Treatment Complete
+  and error-fallback screens (the other two .header users) keep their
+  own spacing.
+*/
+.home-header {
+  margin-bottom: var(--space-3);
+}
+
 .home-logo {
   /*
     Phase 8 sized this up to 96px now that it's the ONLY branding on
@@ -520,41 +533,41 @@ button:disabled:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-7);
-  margin: var(--space-5) auto var(--space-7) auto;
+  gap: var(--space-5);
+  margin: var(--space-2) auto var(--space-7) auto;
 }
 
 
 /* CIRCLE */
 
 .timer-circle {
-  width: 280px;
-  height: 280px;
+  width: 320px;
+  height: 320px;
   position: relative;
   flex-shrink: 0;
 }
 
 .normal-ring {
-  width: 280px;
-  height: 280px;
+  width: 320px;
+  height: 320px;
   transform: rotate(-90deg);
 }
 
 .overtime-ring {
-  width: 280px;
-  height: 280px;
+  width: 320px;
+  height: 320px;
   transform: rotate(90deg) scaleX(-1);
 }
 
 .progress-background {
   fill: none;
   stroke: var(--color-border);
-  stroke-width: 12;
+  stroke-width: 17;
 }
 
 .progress-ring-circle {
   fill: none;
-  stroke-width: 12;
+  stroke-width: 17;
   stroke-linecap: round;
 
   transition:
@@ -595,7 +608,7 @@ button:disabled:hover {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 220px;
+  width: 252px;
   transform: translate(-50%, -50%);
 
   display: flex;
@@ -615,7 +628,7 @@ button:disabled:hover {
 
 .circle-phase-time {
   margin-top: var(--space-3);
-  font-size: 42px;
+  font-size: 46px;
   font-weight: var(--weight-bold);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
@@ -633,12 +646,10 @@ button:disabled:hover {
 /* PHASE ARROWS */
 
 .phase-arrow {
-  width: 64px;
-  height: 96px;
+  width: 56px;
+  height: 88px;
   padding: 0;
   border-radius: var(--radius-md);
-  font-size: 44px;
-  line-height: 1;
   flex-shrink: 0;
 
   display: flex;
@@ -659,6 +670,38 @@ button:disabled:hover {
 .phase-arrow:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+/*
+  An SVG chevron instead of a bare ‹/› glyph - a large text character
+  at this size sits off-center inside its line box depending on the
+  font's own metrics (extra descender space below the baseline), which
+  is what made the old arrows look vertically shifted down. An SVG
+  centers on its actual geometry, not font metrics, so align-items/
+  justify-content above center it exactly regardless of size.
+*/
+.phase-arrow-icon {
+  width: 34px;
+  height: 34px;
+  display: block;
+}
+
+/*
+  On the final phase, the next-phase arrow becomes the "end treatment"
+  action (see nextPhase's caller in App.tsx) - styled red/danger
+  instead of the old greyed-out disabled state, and always clickable
+  (a confirmation modal, not a disabled button, is what prevents an
+  accidental end).
+*/
+.phase-arrow-end {
+  background: var(--color-danger);
+  color: var(--color-primary-contrast);
+  border-color: var(--color-danger);
+}
+
+.phase-arrow-end:hover {
+  background: var(--color-danger-strong);
+  border-color: var(--color-danger-strong);
 }
 
 
@@ -722,6 +765,7 @@ button:disabled:hover {
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
+  text-align: left;
 }
 
 .phase-name small {
@@ -813,30 +857,28 @@ button:disabled:hover {
 =========================== */
 
 /*
-  Phase 8 (header centering fix) - the two outer columns are equal
-  `1fr` tracks (not `auto`) specifically so the middle title-block
-  column sits truly centered in the row regardless of how wide the
-  back button is versus its spacer - an `auto 1fr auto` template
-  instead sizes each outer column to its own content, and the back
-  button is reliably wider than the 1px spacer opposite it, which
-  visibly shifts the title right. See .back-button's own
-  justify-self below for the other half of this fix.
+  Header centering fix, part 2 - the back button (and, on phone/
+  tablet, the fixed sync-status badge floating in the same top-right
+  corner, see .sync-status-badge) used to share a row with the title,
+  which could crowd or cover a long title (eg. a patient's name) at
+  narrower widths. The back button now gets its own row; the title/
+  subtitle renders on the row directly beneath, full width and
+  properly centered, so it never has to compete for horizontal space
+  with the back button or the sync badge. align-items: flex-start
+  keeps the back button from stretching to the container's full
+  width (flex-direction: column's cross-axis default is stretch).
 */
 .top-header {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: start;
-  gap: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
   max-width: 700px;
   margin: 0 auto var(--space-7) auto;
 }
 
-.top-header-spacer {
-  width: 1px;
-}
-
 .title-block {
-  grid-column: 2;
+  align-self: stretch;
   text-align: center;
   min-width: 0;
 }
@@ -866,13 +908,6 @@ button:disabled:hover {
 }
 
 .back-button {
-  /*
-    .top-header's left column is now a 1fr track (see that rule's own
-    comment), wider than this button's natural size - without this,
-    a grid item stretches to fill its column by default, which would
-    visibly balloon the button out to that column's full width.
-  */
-  justify-self: start;
   background: var(--color-surface);
   color: var(--color-ink);
   border: 1.5px solid var(--color-border-strong);
@@ -1362,7 +1397,12 @@ button:disabled:hover {
 .delete-patient-section {
   max-width: 700px;
   margin: var(--space-8) auto 0 auto;
-  text-align: center;
+  display: flex;
+  gap: var(--space-3);
+}
+
+.delete-patient-section button {
+  flex: 1;
 }
 
 .delete-patient-button {
@@ -2262,11 +2302,32 @@ button:disabled:hover {
   align-items: flex-start;
 }
 
+/*
+  ROOT CAUSE (mobile tooth chart bug): this row used to flex-wrap,
+  which is fine at desktop widths where everything fits on one line,
+  but below ~720px the row doesn't have room for both quadrant labels
+  plus all 16 teeth of an arch, so the teeth wrapped onto a second
+  line. Once wrapped, .tooth-chart-row-upper/lower's align-items:
+  flex-end/flex-start (meant to align ONE row of varying-height tooth
+  buttons to the gumline) instead applied per wrapped line, splitting
+  each arch into two misaligned rows and destroying the recognizable
+  arch shape/orientation.
+
+  Fix: never wrap (flex-wrap: nowrap) so the arch is always laid out
+  as one true row - correct orientation preserved at every width.
+  min-width: 0 lets this flex child shrink below its content's
+  natural width so overflow-x can scroll it independently instead of
+  forcing the whole page wider; the quadrant-label/tooth sizes below
+  are also shrunk at narrow widths (see RESPONSIVE) so a scrollbar is
+  only ever a fallback on the very narrowest phones, not the norm.
+*/
 .tooth-chart-arch {
   flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   gap: 3px;
 }
 
@@ -2279,6 +2340,10 @@ button:disabled:hover {
   text-transform: uppercase;
   color: var(--color-text-faint);
   text-align: center;
+}
+
+.quadrant-label-short {
+  display: none;
 }
 
 .tooth-chart-midline {
@@ -2570,8 +2635,8 @@ button:disabled:hover {
 
    Two breakpoints: tablet (iPad-ish, <=900px) and phone (<=520px).
    Nothing changes structurally - spacing, the timer circle, and
-   the top-header grid simply scale down so nothing is cramped,
-   clipped, or forced to overlap on a narrower screen.
+   the top-header simply scale down so nothing is cramped, clipped,
+   or forced to overlap on a narrower screen.
 =========================================================== */
 
 @media (max-width: 900px) {
@@ -2595,22 +2660,26 @@ button:disabled:hover {
   .timer-circle,
   .normal-ring,
   .overtime-ring {
-    width: 240px;
-    height: 240px;
+    width: 280px;
+    height: 280px;
   }
 
   .circle-content {
-    width: 190px;
+    width: 221px;
   }
 
   .circle-phase-time {
-    font-size: 36px;
+    font-size: 40px;
   }
 
   .phase-arrow {
-    width: 52px;
-    height: 84px;
-    font-size: 36px;
+    width: 50px;
+    height: 80px;
+  }
+
+  .phase-arrow-icon {
+    width: 30px;
+    height: 30px;
   }
 
   .tooth-chart {
@@ -2648,17 +2717,18 @@ button:disabled:hover {
 
   .main-timer {
     gap: var(--space-2);
+    margin-top: var(--space-1);
   }
 
   .timer-circle,
   .normal-ring,
   .overtime-ring {
-    width: 200px;
-    height: 200px;
+    width: 240px;
+    height: 240px;
   }
 
   .circle-content {
-    width: 160px;
+    width: 190px;
   }
 
   .circle-phase-name {
@@ -2666,14 +2736,18 @@ button:disabled:hover {
   }
 
   .circle-phase-time {
-    font-size: 28px;
+    font-size: 32px;
   }
 
   .phase-arrow {
-    width: 44px;
-    height: 72px;
-    font-size: 28px;
+    width: 42px;
+    height: 70px;
     border-radius: var(--radius-sm);
+  }
+
+  .phase-arrow-icon {
+    width: 26px;
+    height: 26px;
   }
 
   .timer-controls button {
@@ -2720,5 +2794,63 @@ button:disabled:hover {
 
   .home-nav-icon {
     font-size: 22px;
+  }
+
+  /*
+    Below tablet width there isn't room for a spelled-out "Upper
+    Right" next to a full arch of teeth (see .tooth-chart-arch's own
+    comment on the wrap bug this replaces) - swap to the same UR/UL/
+    LR/LL short-form already used elsewhere in the app (see teeth.ts's
+    QUADRANTS) and shrink the label column and tooth buttons so a
+    whole arch reliably fits in one row without relying on the
+    overflow-x scroll fallback.
+  */
+  .quadrant-label-full {
+    display: none;
+  }
+
+  .quadrant-label-short {
+    display: inline;
+  }
+
+  .tooth-chart-quadrant-label {
+    width: 20px;
+    font-size: 9px;
+  }
+
+  .tooth-chart {
+    padding: var(--space-4) var(--space-2);
+  }
+
+  .tooth-chart-row {
+    gap: var(--space-1);
+  }
+
+  .tooth-chart-arch {
+    gap: 2px;
+  }
+
+  .tooth-chart-divider {
+    margin-left: var(--space-3);
+    margin-right: var(--space-3);
+  }
+
+  .tooth-button {
+    font-size: 9px;
+  }
+
+  .tooth-anterior {
+    width: 16px;
+    height: 25px;
+  }
+
+  .tooth-premolar {
+    width: 20px;
+    height: 31px;
+  }
+
+  .tooth-molar {
+    width: 24px;
+    height: 38px;
   }
 }

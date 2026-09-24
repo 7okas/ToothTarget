@@ -95,7 +95,8 @@ function ToothChart({
       <div className="tooth-chart-row tooth-chart-row-upper">
 
         <span className="tooth-chart-quadrant-label">
-          Upper Right
+          <span className="quadrant-label-full">Upper Right</span>
+          <span className="quadrant-label-short">UR</span>
         </span>
 
         <div className="tooth-chart-arch">
@@ -105,7 +106,8 @@ function ToothChart({
         </div>
 
         <span className="tooth-chart-quadrant-label">
-          Upper Left
+          <span className="quadrant-label-full">Upper Left</span>
+          <span className="quadrant-label-short">UL</span>
         </span>
 
       </div>
@@ -115,7 +117,8 @@ function ToothChart({
       <div className="tooth-chart-row tooth-chart-row-lower">
 
         <span className="tooth-chart-quadrant-label">
-          Lower Right
+          <span className="quadrant-label-full">Lower Right</span>
+          <span className="quadrant-label-short">LR</span>
         </span>
 
         <div className="tooth-chart-arch">
@@ -125,7 +128,8 @@ function ToothChart({
         </div>
 
         <span className="tooth-chart-quadrant-label">
-          Lower Left
+          <span className="quadrant-label-full">Lower Left</span>
+          <span className="quadrant-label-short">LL</span>
         </span>
 
       </div>

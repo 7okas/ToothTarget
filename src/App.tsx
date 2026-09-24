@@ -528,7 +528,7 @@ const BUILTIN_TEMPLATES: ProcedureTemplate[] = (
   },
   {
     id: 'irprep-default',
-    name: 'Indirect Restoration Prep',
+    name: 'Indirect Restoration Preparation',
     isCustom: false,
     phases: [
       { name: 'Preparation', duration: 30 * 60 },
@@ -557,7 +557,7 @@ const BUILTIN_PROCEDURES: Procedure[] = (
   [
   {
     id: 'rct',
-    name: 'RCT',
+    name: 'Root Canal Treatment',
     isCustom: false,
     templateId: 'rct-molar',
     regionTemplateIds: {
@@ -566,10 +566,10 @@ const BUILTIN_PROCEDURES: Procedure[] = (
       molar: 'rct-molar',
     },
   },
-  { id: 'cr', name: 'CR', isCustom: false, templateId: 'cr-default' },
-  { id: 'sp', name: 'S&P', isCustom: false, templateId: 'sp-default' },
-  { id: 'ext', name: 'Ext', isCustom: false, templateId: 'ext-default' },
-  { id: 'irprep', name: 'IRPrep', isCustom: false, templateId: 'irprep-default' },
+  { id: 'cr', name: 'Composite Restoration', isCustom: false, templateId: 'cr-default' },
+  { id: 'sp', name: 'Scaling & Polishing', isCustom: false, templateId: 'sp-default' },
+  { id: 'ext', name: 'Extraction', isCustom: false, templateId: 'ext-default' },
+  { id: 'irprep', name: 'Indirect Restoration Preparation', isCustom: false, templateId: 'irprep-default' },
   ] satisfies Omit<Procedure, 'updatedAt'>[]
 ).map(procedure => ({ ...procedure, updatedAt: BUILTIN_PROCEDURE_UPDATED_AT }))
 
@@ -5529,73 +5529,6 @@ async function openPatient(
   }
 
   /*
-    SKIP PHASE
-
-    Marks the current phase skipped (any time already accrued on it
-    stays recorded - skipping isn't the same as it never having
-    happened) and advances to the next phase, same as finishing it
-    normally would.
-  */
-
-  function skipCurrentPhase() {
-
-    if (!activeTreatment) {
-      return
-    }
-
-    const settled =
-      settleActualTime(
-        activeTreatment,
-        Date.now()
-      )
-
-    const skippedIndex =
-      settled.currentPhaseIndex
-
-    const nextIndex =
-      Math.min(
-        skippedIndex + 1,
-        settled.phases.length - 1
-      )
-
-    const now = new Date().toISOString()
-
-    const phaseMeta: PhaseMeta[] =
-      settled.phaseMeta.map((entry, index) => {
-
-        if (index === skippedIndex) {
-          return {
-            ...entry,
-            status: 'skipped',
-            skipped: true,
-            completedAt: now,
-          }
-        }
-
-        if (index === nextIndex && nextIndex !== skippedIndex) {
-          return {
-            ...entry,
-            startedAt: entry.startedAt ?? now,
-            status: 'active',
-          }
-        }
-
-        return entry
-
-      })
-
-    setActiveTreatment({
-      ...settled,
-      currentPhaseIndex: nextIndex,
-      phaseMeta,
-      lastUpdated: Date.now(),
-    })
-
-    setShowOptionsMenu(false)
-
-  }
-
-  /*
     RESTART PHASE
 
     Resets the current phase's own timing/meta in place - it never
@@ -5695,53 +5628,6 @@ async function openPatient(
               settled.currentPhaseIndex
             )
           : settled.phaseMeta,
-
-      lastUpdated:
-        Date.now(),
-
-    })
-
-  }
-
-
-  /*
-    RESET
-  */
-
-  function resetTimer() {
-
-    if (!activeTreatment) {
-      return
-    }
-
-
-    setActiveTreatment({
-
-      ...activeTreatment,
-
-      phaseTimes:
-        activeTreatment.phases.map(
-          phase => phase.duration
-        ),
-
-      actualTimes:
-        activeTreatment.phases.map(
-          () => 0
-        ),
-
-      phaseMeta:
-        createPhaseMeta(
-          activeTreatment.phases.length
-        ),
-
-      events: [],
-
-      currentPhaseIndex: 0,
-
-      isPaused: false,
-
-      runningSince:
-        new Date().toISOString(),
 
       lastUpdated:
         Date.now(),
@@ -7825,7 +7711,7 @@ async function openPatient(
 
       <div className="app">
 
-        <div className="header">
+        <div className="header home-header">
 
           <img
             src={logo}
@@ -7913,6 +7799,38 @@ async function openPatient(
         </div>
 
 
+        {activeTreatment && (
+
+          <div className="active-treatment-card">
+
+            <div>
+
+              <strong>
+                Active treatment
+              </strong>
+
+              <p>
+                {activeTreatment.patientName}
+                {' — '}
+                {getToothLabel(activeTreatment.toothId)}
+              </p>
+
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                setScreen('timer')
+              }
+            >
+              Resume
+            </button>
+
+          </div>
+
+        )}
+
+
         <div className="patient-search-container">
 
           <input
@@ -7977,38 +7895,6 @@ async function openPatient(
         </div> {/* patient-list */}
 
       </div> {/* patient-search-container */}
-
-        {activeTreatment && (
-
-          <div className="active-treatment-card">
-
-            <div>
-
-              <strong>
-                Active treatment
-              </strong>
-
-              <p>
-                {activeTreatment.patientName}
-                {' — '}
-                {getToothLabel(activeTreatment.toothId)}
-              </p>
-
-            </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                setScreen('timer')
-              }
-            >
-              Resume
-            </button>
-
-          </div>
-
-        )}
-
 
         {showResumePrompt && activeTreatment && (
 
@@ -8374,8 +8260,6 @@ const patientTreatments =
             </h1>
           </div>
 
-          <div className="top-header-spacer" />
-
         </div>
 
 
@@ -8622,9 +8506,9 @@ const patientTreatments =
         </div>
 
 
-        {selectedPatientRecord && (
+        <div className="delete-patient-section">
 
-          <div className="delete-patient-section">
+          {selectedPatientRecord && (
 
             <button
               type="button"
@@ -8633,12 +8517,7 @@ const patientTreatments =
               Edit Patient
             </button>
 
-          </div>
-
-        )}
-
-
-        <div className="delete-patient-section">
+          )}
 
           <button
             type="button"
@@ -8856,8 +8735,6 @@ const patientTreatments =
               {selectedPatient}
             </p>
           </div>
-
-          <div className="top-header-spacer" />
 
         </div>
 
@@ -9125,8 +9002,6 @@ const patientTreatments =
             </p>
           </div>
 
-          <div className="top-header-spacer" />
-
         </div>
 
 
@@ -9214,6 +9089,11 @@ const patientTreatments =
       ]
 
 
+    const isLastPhase =
+      activeTreatment.currentPhaseIndex ===
+      activeTreatment.phases.length - 1
+
+
     const currentPhaseTime =
       activeTreatment.phaseTimes[
         activeTreatment.currentPhaseIndex
@@ -9224,26 +9104,7 @@ const patientTreatments =
       currentPhaseTime < 0
 
 
-    const totalSecondsRemaining =
-      activeTreatment.phaseTimes
-        .slice(
-          activeTreatment.currentPhaseIndex
-        )
-        .reduce(
-          (
-            total,
-            time
-          ) =>
-            total +
-            Math.max(
-              time,
-              0
-            ),
-          0
-        )
-
-
-    const radius = 120
+    const radius = 128
 
     const circumference =
       2 *
@@ -9310,28 +9171,17 @@ const patientTreatments =
           <div className="title-block">
 
             <h1>
+              {activeTreatment.procedureName}
+              {' — '}
               {getToothById(activeTreatment.toothId)?.displayName ??
                 activeTreatment.toothId}
             </h1>
-
-            <p className="procedure-label">
-              {activeTreatment.procedureName}
-            </p>
 
             <p className="patient-label">
               {activeTreatment.patientName}
             </p>
 
-            <p>
-              {formatTime(
-                totalSecondsRemaining
-              )}{' '}
-              remaining
-            </p>
-
           </div>
-
-          <div className="top-header-spacer" />
 
         </div>
 
@@ -9348,8 +9198,11 @@ const patientTreatments =
               activeTreatment.currentPhaseIndex ===
               0
             }
+            aria-label="Previous phase"
           >
-            ‹
+            <svg className="phase-arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 4l-8 8 8 8" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
 
 
@@ -9367,23 +9220,23 @@ const patientTreatments =
                   ? 'overtime-ring'
                   : 'normal-ring'
               }`}
-              width="280"
-              height="280"
-              viewBox="0 0 280 280"
+              width="300"
+              height="300"
+              viewBox="0 0 300 300"
             >
 
               <circle
                 className="progress-background"
-                cx="140"
-                cy="140"
+                cx="150"
+                cy="150"
                 r={radius}
               />
 
 
               <circle
                 className="progress-ring-circle"
-                cx="140"
-                cy="140"
+                cx="150"
+                cy="150"
                 r={radius}
                 style={{
                   strokeDasharray:
@@ -9430,16 +9283,25 @@ const patientTreatments =
 
           <button
             type="button"
-            className="phase-arrow"
-            onClick={
-              nextPhase
-            }
-            disabled={
-              activeTreatment.currentPhaseIndex ===
-              activeTreatment.phases.length - 1
+            className={`phase-arrow ${
+              isLastPhase ? 'phase-arrow-end' : ''
+            }`}
+            onClick={() => {
+              if (isLastPhase) {
+                setShowEndTreatmentModal(true)
+              } else {
+                nextPhase()
+              }
+            }}
+            aria-label={
+              isLastPhase
+                ? 'End treatment'
+                : 'Next phase'
             }
           >
-            ›
+            <svg className="phase-arrow-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 4l8 8-8 8" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
 
         </div>
@@ -9499,13 +9361,6 @@ const patientTreatments =
 
                     <button
                       type="button"
-                      onClick={skipCurrentPhase}
-                    >
-                      Skip Phase
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={restartCurrentPhase}
                     >
                       Restart Phase
@@ -9544,27 +9399,6 @@ const patientTreatments =
                       onClick={() => setOptionsView('addInterruption')}
                     >
                       + Add Interruption
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        resetTimer()
-                        setShowOptionsMenu(false)
-                      }}
-                    >
-                      Reset Treatment
-                    </button>
-
-                    <button
-                      type="button"
-                      className="button-danger"
-                      onClick={() => {
-                        setShowOptionsMenu(false)
-                        setShowEndTreatmentModal(true)
-                      }}
-                    >
-                      End Treatment
                     </button>
 
                     <button
@@ -10278,8 +10112,6 @@ const patientTreatments =
             </p>
           </div>
 
-          <div className="top-header-spacer" />
-
         </div>
 
 
@@ -10599,8 +10431,6 @@ const patientTreatments =
               </span>
             )}
           </div>
-
-          <div className="top-header-spacer" />
 
         </div>
 
@@ -10937,8 +10767,6 @@ const patientTreatments =
 
           </div>
 
-          <div className="top-header-spacer" />
-
         </div>
 
 
@@ -11170,8 +10998,6 @@ const patientTreatments =
             </h1>
           </div>
 
-          <div className="top-header-spacer" />
-
         </div>
 
 
@@ -11271,8 +11097,6 @@ const patientTreatments =
               Review Before Syncing
             </h1>
           </div>
-
-          <div className="top-header-spacer" />
 
         </div>
 
@@ -11436,8 +11260,6 @@ const patientTreatments =
               Settings
             </h1>
           </div>
-
-          <div className="top-header-spacer" />
 
         </div>
 

@@ -255,10 +255,6 @@ export default function MicrosoftAccountSection() {
               {isBusy ? 'Signing Out…' : 'Sign Out'}
             </button>
 
-          </div>
-
-          <div className="options-menu-list settings-actions">
-
             <button
               type="button"
               onClick={handleSyncNow}
