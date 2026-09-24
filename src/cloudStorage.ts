@@ -61,6 +61,14 @@ const GRAPH_APPROOT =
   'https://graph.microsoft.com/v1.0/me/drive/special/approot'
 
 /*
+  Used only for the by-id content GET in readCloudSyncDocument() below
+  - see that function's own header comment for why a by-id request is
+  necessary at all here, instead of just appending :/content to
+  GRAPH_APPROOT like every other read in this file does.
+*/
+const GRAPH_DRIVE_ROOT = 'https://graph.microsoft.com/v1.0/me/drive'
+
+/*
   Reads a Graph error response body for a useful message (Graph
   returns { error: { code, message } } on failure) - never includes
   the Authorization header or the token itself.
@@ -412,16 +420,34 @@ export function __setAppFolderProvisionedForTests(provisioned: boolean): void {
   READ
 
   Two Graph requests, deliberately: a metadata GET (no :/content) to
-  read the driveItem's real eTag off the response body, and a second
-  GET .../content - the exact same call/pattern readCloudData() above
-  already uses - to fetch the actual bytes. The eTag is NEVER derived
-  from the content response, hashed, or invented locally; it is
-  whatever Graph's driveItem.eTag property says, preserved verbatim
-  (quotes and all) so it can be handed back unchanged as the If-Match
-  value on a later write. (The file could in principle change in the
-  instant between these two requests; that's not a correctness problem
-  here, because the conditional WRITE below is what actually enforces
-  concurrency safety, not this read - see writeCloudSyncDocument().)
+  read the driveItem's real eTag (and id - see below) off the response
+  body, and a second request to fetch the actual bytes. The eTag is
+  NEVER derived from the content response, hashed, or invented
+  locally; it is whatever Graph's driveItem.eTag property says,
+  preserved verbatim (quotes and all) so it can be handed back
+  unchanged as the If-Match value on a later write. (The file could in
+  principle change in the instant between these two requests; that's
+  not a correctness problem here, because the conditional WRITE below
+  is what actually enforces concurrency safety, not this read - see
+  writeCloudSyncDocument().)
+
+  DO NOT "simplify" the content fetch back to
+  `${GRAPH_APPROOT}:/${CLOUD_SYNC_FILE_NAME}:/content` (the compound
+  special-folder-colon-path-plus-:/content form, matching
+  readCloudData() above). That exact combination - a colon path off
+  `special/approot` with a further :/content suffix appended - was
+  confirmed by live testing (2026-09) to fail with a generic 400
+  invalidRequest from Graph, even though the plain metadata GET one
+  line above it (same colon path, no :/content) succeeds, and even
+  though the same :/content suffix works fine everywhere else in this
+  file where it's appended to a plain (non-special-folder) path. This
+  looks like a real Graph-side limitation specific to that exact
+  compound form under `special/approot`, not anything wrong with the
+  file name/path itself. The by-id form used below
+  (`/me/drive/items/{id}/content`) is unaffected - Graph resolves it
+  through a completely different code path - and the metadata response
+  already carries the id needed for it, so this costs no extra
+  request.
 
   Every distinguishable outcome the future sync/merge layer needs is
   its own status, never collapsed into a generic error:
@@ -483,6 +509,7 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
   }
 
   let eTag: string
+  let itemId: string
 
   try {
 
@@ -495,7 +522,15 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
       }
     }
 
+    if (typeof metadata?.id !== 'string' || metadata.id === '') {
+      return {
+        status: 'graph-error',
+        detail: 'The cloud file metadata did not include an id.',
+      }
+    }
+
     eTag = metadata.eTag
+    itemId = metadata.id
 
   } catch {
 
@@ -510,8 +545,12 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
 
   try {
 
+    /*
+      By id, not `${GRAPH_APPROOT}:/${CLOUD_SYNC_FILE_NAME}:/content` -
+      see this function's header comment for exactly why.
+    */
     contentResponse = await fetch(
-      `${GRAPH_APPROOT}:/${CLOUD_SYNC_FILE_NAME}:/content`,
+      `${GRAPH_DRIVE_ROOT}/items/${itemId}/content`,
       { headers: authHeaders }
     )
 

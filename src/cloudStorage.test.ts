@@ -142,7 +142,7 @@ describe('readCloudSyncDocument', () => {
     const fetchMock = vi.mocked(fetch)
 
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(200, { eTag: exactETag }))
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: exactETag, id: 'item-1' }))
       .mockResolvedValueOnce(jsonResponse(200, document))
 
     const result = await readCloudSyncDocument()
@@ -156,6 +156,15 @@ describe('readCloudSyncDocument', () => {
     expect(result.eTag).toBe(exactETag)
     expect(result.document).toEqual(document)
 
+    /*
+      The content fetch must be by id, not the compound
+      approot:/{fileName}:/content form - see readCloudSyncDocument()'s
+      own header comment in cloudStorage.ts for why.
+    */
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'https://graph.microsoft.com/v1.0/me/drive/items/item-1/content'
+    )
+
   })
 
   it('does not map malformed cloud JSON to not-found', async () => {
@@ -163,7 +172,7 @@ describe('readCloudSyncDocument', () => {
     const fetchMock = vi.mocked(fetch)
 
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"', id: 'item-1' }))
       .mockResolvedValueOnce(textResponse(200, '{ not valid json'))
 
     const result = await readCloudSyncDocument()
@@ -178,7 +187,7 @@ describe('readCloudSyncDocument', () => {
     const fetchMock = vi.mocked(fetch)
 
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"', id: 'item-1' }))
       .mockResolvedValueOnce(textResponse(200, '{ not valid json'))
 
     const result = await readCloudSyncDocument()
@@ -214,7 +223,7 @@ describe('readCloudSyncDocument', () => {
     }
 
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"', id: 'item-1' }))
       .mockResolvedValueOnce(jsonResponse(200, legacyLookingDocument))
 
     const result = await readCloudSyncDocument()
@@ -239,7 +248,7 @@ describe('readCloudSyncDocument', () => {
     }
 
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"', id: 'item-1' }))
       .mockResolvedValueOnce(jsonResponse(200, legacyLookingDocument))
 
     const result = await readCloudSyncDocument()
@@ -283,7 +292,7 @@ describe('readCloudSyncDocument', () => {
     }
 
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"', id: 'item-1' }))
       .mockResolvedValueOnce(jsonResponse(200, documentWithBadPatient))
 
     const result = await readCloudSyncDocument()
@@ -370,7 +379,7 @@ describe('readCloudSyncDocument', () => {
     const fetchMock = vi.mocked(fetch)
 
     fetchMock
-      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"', id: 'item-1' }))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
 
     const result = await readCloudSyncDocument()
@@ -391,6 +400,43 @@ describe('readCloudSyncDocument', () => {
 
     expect(result.status).toBe('graph-error')
     expect(result.status).not.toBe('network-unreachable')
+
+  })
+
+  it('maps metadata missing an id to graph-error, and never attempts the content request', async () => {
+
+    const fetchMock = vi.mocked(fetch)
+
+    // eTag present, id missing - the content fetch below needs the id
+    // to build its by-id URL, so this must fail right here, before a
+    // second fetch is ever attempted.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"' }))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('graph-error')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+  })
+
+  it('fetches file content by id, not the compound special-folder colon-path-plus-:/content form that Graph rejects', async () => {
+
+    const document = makeDocument()
+
+    const fetchMock = vi.mocked(fetch)
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { eTag: '"abc"', id: 'AB12!345' }))
+      .mockResolvedValueOnce(jsonResponse(200, document))
+
+    const result = await readCloudSyncDocument()
+
+    expect(result.status).toBe('found')
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'https://graph.microsoft.com/v1.0/me/drive/items/AB12!345/content'
+    )
+    expect(fetchMock.mock.calls[1][0]).not.toContain('special/approot')
+    expect(fetchMock.mock.calls[1][0]).not.toContain(':/content')
 
   })
 
