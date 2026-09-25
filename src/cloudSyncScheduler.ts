@@ -248,6 +248,60 @@ export function subscribeLastSyncOutcome(listener: () => void): () => void {
 
 }
 
+/*
+  LOCAL DATA VERSION (UI refresh signal)
+
+  A plain incrementing counter, bumped exactly once per sync attempt
+  whose result is 'synced' or 'synced-with-conflicts' - the two
+  statuses that only exist once cloudSyncEngine.ts's own
+  commitLocalState() has already run and succeeded (see that file's
+  header comment: 'cloud-committed-locally-pending' is returned
+  instead whenever the cloud write succeeded but the local commit
+  itself threw, so it deliberately does NOT bump this).
+
+  This exists so a component holding React state that mirrors synced
+  localStorage keys (App.tsx's savedPatients/savedTreatments/
+  templates/procedures/patientNumberConflicts) can notice "new synced
+  data just landed in localStorage" and re-read it, regardless of
+  whether THIS tab initiated the sync or another device's change
+  simply arrived via one. Deliberately a separate, narrower signal
+  from `status`/lastSyncOutcome above: those exist to describe a sync
+  attempt's outcome for DISPLAY (see their own comments); this one
+  exists purely to say "synced data actually changed underneath you,
+  go re-read it" - a component only interested in display text has no
+  reason to subscribe to this, and a component only interested in
+  fresh data has no reason to parse a SyncOutcomeReason to figure out
+  whether local storage actually changed.
+*/
+
+let localDataVersion = 0
+
+const localDataVersionListeners = new Set<() => void>()
+
+function bumpLocalDataVersion(): void {
+
+  localDataVersion += 1
+
+  for (const listener of localDataVersionListeners) {
+    listener()
+  }
+
+}
+
+export function getLocalDataVersion(): number {
+  return localDataVersion
+}
+
+export function subscribeLocalDataVersion(listener: () => void): () => void {
+
+  localDataVersionListeners.add(listener)
+
+  return () => {
+    localDataVersionListeners.delete(listener)
+  }
+
+}
+
 function scheduleFlush(): void {
 
   if (microtaskQueued) {
@@ -313,6 +367,15 @@ function startIfIdle(): void {
         }
 
         const succeeded = isSuccessStatus(result)
+
+        /*
+          See LOCAL DATA VERSION's own comment above for exactly why
+          this fires here and only here (isSuccessStatus() is exactly
+          "commitLocalState() ran and succeeded").
+        */
+        if (succeeded) {
+          bumpLocalDataVersion()
+        }
 
         /*
           Phase 9 - dated backup rotation. Deliberately fire-and-
@@ -441,4 +504,5 @@ export function __resetCloudSyncSchedulerForTests(): void {
   skipStaleReviewCheckOnce = false
   pendingStaleReview = null
   lastSyncOutcome = null
+  localDataVersion = 0
 }

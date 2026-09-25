@@ -29,6 +29,8 @@ import {
   resumeSyncAfterStaleReview,
   getLastSyncOutcome,
   subscribeLastSyncOutcome,
+  getLocalDataVersion,
+  subscribeLocalDataVersion,
   __resetCloudSyncSchedulerForTests,
 } from './cloudSyncScheduler'
 
@@ -671,6 +673,137 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
     __resetCloudSyncSchedulerForTests()
 
     expect(getLastSyncOutcome()).toBeNull()
+
+  })
+
+})
+
+describe('localDataVersion (UI refresh signal)', () => {
+
+  it('starts at 0', () => {
+    expect(getLocalDataVersion()).toBe(0)
+  })
+
+  it('bumps on a clean "synced" result', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLocalDataVersion()).toBe(1)
+
+  })
+
+  it('bumps on "synced-with-conflicts" too - commitLocalState() also ran for that outcome', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced-with-conflicts',
+      patientNumberConflicts: [],
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLocalDataVersion()).toBe(1)
+
+  })
+
+  it('does NOT bump on failure statuses - nothing was committed locally', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'auth-failed' })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLocalDataVersion()).toBe(0)
+
+  })
+
+  it('does NOT bump on cloud-committed-locally-pending - the local commit itself failed', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'cloud-committed-locally-pending',
+      detail: 'quota exceeded',
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLocalDataVersion()).toBe(0)
+
+  })
+
+  it('bumps once per successful attempt, not once per requestCloudSync() call coalesced into it', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    requestCloudSync()
+    requestCloudSync()
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLocalDataVersion()).toBe(1)
+
+  })
+
+  it('notifies subscribers exactly when it bumps', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    const listener = vi.fn()
+    const unsubscribe = subscribeLocalDataVersion(listener)
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(getLocalDataVersion()).toBe(1)
+
+    unsubscribe()
+
+  })
+
+  it('does not notify subscribers on a failed attempt', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'network-unreachable', detail: 'offline' })
+
+    const listener = vi.fn()
+    const unsubscribe = subscribeLocalDataVersion(listener)
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(listener).not.toHaveBeenCalled()
+
+    unsubscribe()
+
+  })
+
+  it('is reset to 0 by __resetCloudSyncSchedulerForTests', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'synced',
+      patientNumberConflicts: [],
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getLocalDataVersion()).toBe(1)
+
+    __resetCloudSyncSchedulerForTests()
+
+    expect(getLocalDataVersion()).toBe(0)
 
   })
 

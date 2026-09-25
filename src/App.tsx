@@ -38,6 +38,7 @@ import {
   getPendingStaleReview,
   subscribePendingStaleReview,
   resumeSyncAfterStaleReview,
+  subscribeLocalDataVersion,
 } from './cloudSyncScheduler'
 import type { StaleReviewCandidate } from './staleRecordReview'
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
@@ -4561,6 +4562,54 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
         handlePatientStorageChange
       )
     }
+
+  }, [])
+
+
+  /*
+    REFRESH AFTER BACKGROUND SYNC
+
+    cloudSyncEngine.ts's commitLocalState() writes freshly-merged
+    synced data straight into localStorage whenever a background sync
+    succeeds (triggered automatically after sign-in, on app load, and
+    after most patient/treatment/template/procedure mutations - see
+    requestCloudSync()'s call sites throughout this file) - but that's
+    an external write this component's own React state has no way to
+    notice on its own: the mount effect above only ever runs once, and
+    the "storage" event above only fires in OTHER tabs, never this
+    one. Subscribing to cloudSyncScheduler.ts's own local-data-version
+    counter (bumped only once commitLocalState() has actually
+    succeeded - see that function's own comment) closes this gap:
+    every time a background sync lands new data locally, this re-reads
+    exactly the same synced keys and adopts them into the UI, with no
+    reload required. Deliberately a lighter read than the mount
+    effect's own migration pipeline above - data that just came
+    through a successful sync has already passed
+    validateCloudSyncDocument() inside the sync engine itself, so it
+    needs adopting, not migrating.
+  */
+
+  useEffect(() => {
+
+    function refreshFromSyncedLocalStorage() {
+
+      const freshPatients = readPersistedPatients()
+
+      setSavedPatients(freshPatients)
+      setSavedTreatments(readPersistedSavedTreatments())
+      setTemplates(readPersistedTemplates().map(classifyTemplate))
+      setProcedures(readPersistedProcedures())
+
+      setPatientNumberConflicts(
+        reconcilePatientNumberConflicts(
+          readPersistedPatientNumberConflicts(),
+          freshPatients
+        )
+      )
+
+    }
+
+    return subscribeLocalDataVersion(refreshFromSyncedLocalStorage)
 
   }, [])
 
