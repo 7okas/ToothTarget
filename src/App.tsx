@@ -12,6 +12,11 @@ import { calculateInterruptionSeconds } from './treatmentEvents'
 import { findExactDuplicateTemplate } from './templates'
 import { calculateAppointmentDurationEstimate } from './statistics'
 import {
+  BUILTIN_PROCEDURE_UPDATED_AT,
+  COMPOSITE_CLASS_PROCEDURE_SEEDS,
+  seedMissingBuiltinProcedures,
+} from './procedureSeeding'
+import {
   TEMPLATE_TAXONOMY,
   UNCLASSIFIED,
   classifyTemplate,
@@ -559,16 +564,21 @@ const BUILTIN_TEMPLATES: ProcedureTemplate[] = (
 
 /*
   Phase 2 (Sync & Statistics Redesign): built-ins are no longer immune
-  to editing - confirmEditProcedure() (below) now renames any
+  to editing or archiving - confirmEditProcedure()/
+  setProcedureArchiveStatusInRegistry() (below) now rename/archive any
   procedure, built-in or custom, since there's no longer a separate
-  "built-in procedure that cannot be touched" (deletion is still
-  isCustom-gated for now; that's Phase 2's next step). This fixed
-  seed timestamp is still stamped onto all of them purely to satisfy
-  the shared Procedure type at creation time - a genuine rename
+  "built-in procedure that cannot be touched". This fixed seed
+  timestamp is still stamped onto all of them purely to satisfy the
+  shared Procedure type at creation time - a genuine rename/archive
   bumps updatedAt to the real edit time, same as any other procedure.
-*/
-const BUILTIN_PROCEDURE_UPDATED_AT = '2024-01-01T00:00:00.000Z'
 
+  COMPOSITE_CLASS_PROCEDURE_SEEDS/seedMissingBuiltinProcedures() (used
+  just below and in the load effect's own migration pass) live in
+  procedureSeeding.ts instead of here, specifically so they're
+  directly unit-testable - see that file's own header comment for the
+  full reasoning (App.tsx itself can't be imported at runtime by any
+  test in this project).
+*/
 const BUILTIN_PROCEDURES: Procedure[] = (
   [
   {
@@ -583,6 +593,7 @@ const BUILTIN_PROCEDURES: Procedure[] = (
     },
   },
   { id: 'cr', name: 'Composite Restoration', isCustom: false, templateId: 'cr-default' },
+  ...COMPOSITE_CLASS_PROCEDURE_SEEDS,
   { id: 'sp', name: 'Scaling & Polishing', isCustom: false, templateId: 'sp-default' },
   { id: 'ext', name: 'Extraction', isCustom: false, templateId: 'ext-default' },
   { id: 'irprep', name: 'Indirect Restoration Preparation', isCustom: false, templateId: 'irprep-default' },
@@ -3987,6 +3998,35 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
     }
 
     /*
+      SEED MISSING BUILT-IN PROCEDURES (Phase 2, Step 7)
+
+      Same placement/guard reasoning as the procedure timestamp
+      migration just above - runs before anything is committed to
+      state/localStorage, guarded on its own so a bug here can never
+      prevent the already-shaped procedures from still reaching the
+      app. See seedMissingBuiltinProcedures() above.
+    */
+
+    let builtinProcedureSeedMigrationChanged = false
+
+    try {
+
+      const builtinProcedureSeedResult =
+        seedMissingBuiltinProcedures(shapedProcedures)
+
+      shapedProcedures = builtinProcedureSeedResult.procedures
+
+      builtinProcedureSeedMigrationChanged = builtinProcedureSeedResult.changed
+
+    } catch {
+
+      console.log(
+        'Could not seed missing built-in procedures.'
+      )
+
+    }
+
+    /*
       TREATMENT ID MIGRATION
 
       Runs before the patient-identity pass below (and before
@@ -4313,7 +4353,8 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
     if (
       templateProcedureIdMigrationChanged ||
       templateTimestampMigrationChanged ||
-      procedureTimestampMigrationChanged
+      procedureTimestampMigrationChanged ||
+      builtinProcedureSeedMigrationChanged
     ) {
 
       localStorage.setItem(
