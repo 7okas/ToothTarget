@@ -514,6 +514,62 @@ function recordSuccessfulPush(
 
 }
 
+/*
+  MIGRATION BRIDGE (Phase 5 follow-up)
+
+  "Has the cloud changed since this device last knew?" - shared by
+  both pushLocalSnapshot()'s pre-write check and pullCloudSnapshot()'s
+  own check below. Normally this is a pure ETag comparison (see
+  LOCAL_SYNC_ETAG_KEY's own comment for why ETag, not updatedAt, is the
+  real signal). But a device whose LAST REAL sync happened under the
+  OLD sync engine - before toothTargetCloudSyncETag existed at all -
+  has toothTargetCloudSyncUpdatedAt (which the old engine always
+  wrote) but no ETag yet. Without this bridge, such a device would
+  read knownCloudETag as null on its very first Phase-5 sync and
+  treat the cloud as unconditionally "changed", even when nothing
+  actually happened - a false 'diverged' purely from the old-to-new
+  migration gap, not a real conflict.
+
+  The bridge only ever fires in that one specific gap (ETag absent,
+  OLD updatedAt marker present): it falls back to comparing that
+  updatedAt against the cloud document's own updatedAt. Equal means
+  "treat as unchanged" - the normal push/pull rules then decide what
+  to do from there (push if local is dirty, adopt if clean), and a
+  successful push/adopt always records a real ETag afterward (see
+  recordSuccessfulPush()/adoptCloudSnapshotLocally()), so this bridge
+  is consulted at most once per device. Different means "treat as
+  changed" - exactly today's behavior, so 'diverged' still stands when
+  local has its own unsynced changes. A device with BOTH keys absent
+  (genuinely never synced under either system) hits neither branch and
+  falls through to "changed", unchanged from before this bridge
+  existed.
+
+  Deliberately does not touch isLocalDataDirty(), the pre-adopt safety
+  copy, the change counters, or anything else - deciding "is the cloud
+  different" is the only thing this answers, exactly like the plain
+  ETag comparison it's standing in for.
+*/
+function hasCloudChangedSinceKnown(
+  cloudUpdatedAt: string,
+  cloudETag: string
+): boolean {
+
+  const knownCloudETag = readLocalSyncETag()
+
+  if (knownCloudETag !== null) {
+    return cloudETag !== knownCloudETag
+  }
+
+  const knownCloudUpdatedAt = readLocalSyncUpdatedAt()
+
+  if (knownCloudUpdatedAt !== null) {
+    return cloudUpdatedAt !== knownCloudUpdatedAt
+  }
+
+  return true
+
+}
+
 export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
 
   /*
@@ -541,17 +597,13 @@ export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
   }
 
   /*
-    The ETag, not updatedAt, is the PRE-WRITE comparison - see
-    LOCAL_SYNC_ETAG_KEY's own comment for why: updatedAt only has
-    millisecond resolution, so two genuinely different writes (eg. this
-    device racing another, or even racing itself in a fast test) can
-    share the exact same updatedAt string without the ETag ever
-    colliding the same way. knownCloudUpdatedAt is read too, for the
-    one place below that specifically compares it per this phase's own
-    spec (the one-retry-after-412 check) - see that check's own
-    comment for why updatedAt, not ETag, is deliberately used there.
+    knownCloudUpdatedAt is read here (even though the PRE-WRITE check
+    below now goes through hasCloudChangedSinceKnown(), which does its
+    own ETag/migration-bridge reads) because the one-retry-after-412
+    check further down still specifically compares it per this phase's
+    own spec - see that check's own comment for why updatedAt, not
+    ETag, is deliberately used there.
   */
-  const knownCloudETag = readLocalSyncETag()
   const knownCloudUpdatedAt = readLocalSyncUpdatedAt()
 
   const divergedResult: CloudSyncResult = {
@@ -562,19 +614,21 @@ export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
   }
 
   /*
-    A cloud document already exists, but this device has no record of
-    ever having confirmed a cloud version (knownCloudETag === null) -
-    never push blindly over that. The normal path for a never-synced
-    device is pullCloudSnapshot() running first (app open/sign-in), which
-    only ever delegates here with a non-null knownCloudETag already
-    confirmed to match (see that function's own comment) - this check
-    only ever fires for the rare direct-push-before-any-pull case, and
-    it fires on purpose: a device with no memory of the cloud's content
-    must never silently overwrite a document it knows nothing about.
+    A cloud document already exists - never push blindly over it
+    without first confirming (via hasCloudChangedSinceKnown(), ETag or
+    its old-system migration-bridge fallback) that this device's
+    record of the cloud still matches. The normal path for a never-
+    synced device is pullCloudSnapshot() running first (app open/
+    sign-in), which only ever delegates here once it's already
+    confirmed the cloud is unchanged (see that function's own comment)
+    - this check only ever fires for the rare direct-push-before-any-
+    pull case, and it fires on purpose: a device with no memory of the
+    cloud's content must never silently overwrite a document it knows
+    nothing about.
   */
   if (
     cloudRead.status === 'found' &&
-    (knownCloudETag === null || cloudRead.eTag !== knownCloudETag)
+    hasCloudChangedSinceKnown(cloudRead.document.updatedAt, cloudRead.eTag)
   ) {
     return divergedResult
   }
@@ -869,13 +923,12 @@ export async function pullCloudSnapshot(): Promise<CloudSyncResult> {
   }
 
   /*
-    ETag, not updatedAt - see LOCAL_SYNC_ETAG_KEY's own comment
-    (same reasoning pushLocalSnapshot() already applies to itself).
+    ETag (or, for a device last synced under the OLD system, the
+    updatedAt migration bridge) - see hasCloudChangedSinceKnown()'s own
+    comment, shared with pushLocalSnapshot().
   */
-  const knownCloudETag = readLocalSyncETag()
-
   const cloudChangedSinceKnown =
-    knownCloudETag === null || cloudRead.eTag !== knownCloudETag
+    hasCloudChangedSinceKnown(cloudRead.document.updatedAt, cloudRead.eTag)
 
   /*
     AMENDMENT 2 - PULL-SIDE RACE GUARD

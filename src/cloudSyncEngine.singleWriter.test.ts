@@ -348,6 +348,152 @@ describe('pushLocalSnapshot - normal push (cloud found, unchanged since last kno
 
 })
 
+describe('hasCloudChangedSinceKnown - old-system migration bridge', () => {
+
+  it('(1) old-system device (updatedAt present, ETag/counters absent) with a matching cloud updatedAt: NOT diverged, pushes, and records a real ETag', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+    // toothTargetCloudSyncETag, toothTargetLocalChangeCounter, and
+    // toothTargetLastSyncedChangeCounter are all deliberately absent -
+    // exactly how a device last synced under the OLD engine looks the
+    // first time it runs this code.
+    localStorage.setItem('toothTargetCloudSyncUpdatedAt', '2026-01-01T00:00:00.000Z')
+    markLocalDataDirty()
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument({ updatedAt: '2026-01-01T00:00:00.000Z' }),
+      eTag: '"bridge-etag"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"new-etag"' })
+
+    const result = await pushLocalSnapshot()
+
+    expect(result.status).toBe('synced')
+    expect(mockedWrite).toHaveBeenCalledTimes(1)
+    // The freshly-read ETag was used as the conditional write's
+    // expectedETag - the bridge only decided "unchanged", it never
+    // invented an ETag to write with.
+    expect(mockedWrite.mock.calls[0][1]).toBe('"bridge-etag"')
+    expect(localStorage.getItem('toothTargetCloudSyncETag')).toBe('"new-etag"')
+
+  })
+
+  it('(2) same old-system device, but the cloud updatedAt differs: diverges, writes nothing', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+    localStorage.setItem('toothTargetCloudSyncUpdatedAt', '2026-01-01T00:00:00.000Z')
+    markLocalDataDirty()
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument({ updatedAt: '2026-02-01T00:00:00.000Z' }),
+      eTag: '"someone-elses-write"',
+    })
+
+    const result = await pushLocalSnapshot()
+
+    expect(result.status).toBe('diverged')
+    expect(mockedWrite).not.toHaveBeenCalled()
+    expect(localStorage.getItem('toothTargetCloudSyncETag')).toBeNull()
+
+  })
+
+  it('(3) after the bridge is used once, a later push compares the real ETag, not the bridge, even when updatedAt would coincidentally still match', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+    localStorage.setItem('toothTargetCloudSyncUpdatedAt', '2026-01-01T00:00:00.000Z')
+    markLocalDataDirty()
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument({ updatedAt: '2026-01-01T00:00:00.000Z' }),
+      eTag: '"bridge-etag"',
+    })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"recorded-etag"' })
+
+    const firstResult = await pushLocalSnapshot()
+
+    expect(firstResult.status).toBe('synced')
+    expect(localStorage.getItem('toothTargetCloudSyncETag')).toBe('"recorded-etag"')
+
+    const recordedUpdatedAt = localStorage.getItem('toothTargetCloudSyncUpdatedAt')!
+
+    markLocalDataDirty()
+
+    /*
+      The cloud now reports the EXACT updatedAt this device itself
+      just recorded - if the bridge were still being consulted (ie. if
+      recording a real ETag hadn't actually retired it), this would be
+      misread as "unchanged". But a genuinely different ETag is also
+      present (someone else wrote in between) - proving the real ETag
+      comparison, not the bridge, is what runs once an ETag exists.
+    */
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument({ updatedAt: recordedUpdatedAt }),
+      eTag: '"someone-elses-write"',
+    })
+
+    const secondResult = await pushLocalSnapshot()
+
+    expect(secondResult.status).toBe('diverged')
+
+  })
+
+  it('(4) a brand-new device (neither ETag nor the old updatedAt marker) still diverges when the cloud already has a document - the bridge never fires without the old marker', async () => {
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+    // Neither toothTargetCloudSyncUpdatedAt nor toothTargetCloudSyncETag
+    // has ever been set on this device.
+    markLocalDataDirty()
+
+    mockedRead.mockResolvedValueOnce({
+      status: 'found',
+      document: makeCloudDocument({ updatedAt: '2026-01-01T00:00:00.000Z' }),
+      eTag: '"pre-existing"',
+    })
+
+    const result = await pushLocalSnapshot()
+
+    expect(result.status).toBe('diverged')
+    expect(mockedWrite).not.toHaveBeenCalled()
+
+  })
+
+  it('(5) the same bridge applies through pullCloudSnapshot()\'s own entry path - an old-system device with a matching cloud updatedAt is not diverged', async () => {
+
+    /*
+      Local is "dirty" by isLocalDataDirty()'s own existing (unchanged)
+      fallback rule, since toothTargetLastSyncedChangeCounter is absent
+      and local has real data - this test is specifically about
+      hasCloudChangedSinceKnown() inside pullCloudSnapshot(), not about
+      isLocalDataDirty() at all. With the cloud reported as unchanged
+      (via the bridge), pull should fall through to a push rather than
+      diverging - exactly the false alarm reported on a normal app open.
+    */
+
+    seedLocalSynchronizedData({ patients: [makePatient({ id: 'a' })] })
+    localStorage.setItem('toothTargetCloudSyncUpdatedAt', '2026-01-01T00:00:00.000Z')
+    markLocalDataDirty()
+
+    const sharedDocument = makeCloudDocument({ updatedAt: '2026-01-01T00:00:00.000Z' })
+
+    mockedRead
+      .mockResolvedValueOnce({ status: 'found', document: sharedDocument, eTag: '"bridge-etag"' })
+      .mockResolvedValueOnce({ status: 'found', document: sharedDocument, eTag: '"bridge-etag"' })
+    mockedWrite.mockResolvedValueOnce({ status: 'written', eTag: '"new-etag"' })
+
+    const result = await pullCloudSnapshot()
+
+    expect(result.status).toBe('synced')
+    expect(mockedWrite).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('toothTargetCloudSyncETag')).toBe('"new-etag"')
+
+  })
+
+})
+
 describe('pushLocalSnapshot - diverged (Amendment 4 / Phase 6 hook)', () => {
 
   it('diverges on a DIFFERENT write that happens to share the exact same updatedAt millisecond (ETag, not updatedAt, is the real comparison)', async () => {
