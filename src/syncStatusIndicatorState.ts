@@ -121,6 +121,22 @@ export function reduceSyncIndicatorState(
 }
 
 /*
+  PHASE 6 - OPEN THE RESOLUTION SCREEN FROM THE BADGE
+
+  Pure, same reasoning as the functions around it. The badge becomes a
+  button that opens the resolution screen only while it is showing the
+  attention icon for the 'diverged' outcome - never for any other
+  attention state (an expired sign-in, corrupted cloud data, a
+  patient-number conflict each have their own, different next step).
+*/
+export function canReviewDifferencesFromBadge(
+  icon: SyncIconState,
+  outcome: SyncOutcomeReason | null
+): boolean {
+  return icon === 'attention' && outcome?.type === 'diverged'
+}
+
+/*
   MANUAL SYNC-ON-CLICK GUARD (Phase 8)
 
   Pure, same reasoning as reduceSyncIndicatorState() above. The

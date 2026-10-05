@@ -172,6 +172,38 @@ describe('computeStartupGateView - what the gate shows', () => {
 
   })
 
+  it('Phase 6: a diverged outcome gets its own view (route to the resolution screen), never the generic error/Retry view', () => {
+
+    expect(
+      computeStartupGateView(true, { passed: false, phase: 'error' }, { type: 'diverged' })
+    ).toEqual({ kind: 'diverged' })
+
+  })
+
+  it('Phase 6: "Continue without syncing" still works from the diverged view - once passed it is "passed"', () => {
+
+    expect(
+      computeStartupGateView(true, { passed: true, phase: 'error' }, { type: 'diverged' })
+    ).toEqual({ kind: 'passed' })
+
+  })
+
+  it('Phase 6: only the diverged outcome changes view; every other failure keeps the error view', () => {
+
+    for (const type of ['offline', 'not-signed-in', 'cloud-data-corrupted', 'patient-number-conflicts'] as const) {
+
+      expect(
+        computeStartupGateView(true, { passed: false, phase: 'error' }, { type })
+      ).toEqual({ kind: 'error', outcome: { type } })
+
+    }
+
+    expect(
+      computeStartupGateView(true, { passed: false, phase: 'error' }, null)
+    ).toEqual({ kind: 'error', outcome: null })
+
+  })
+
   it('shows the specific classified outcome on failure, not a generic error', () => {
 
     const outcome = { type: 'offline' as const }

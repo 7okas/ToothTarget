@@ -253,6 +253,17 @@ describe('classifySyncOutcome - every CloudSyncResult status maps to its own dis
 
   })
 
+  it('diverged copy invites the dentist to review, and no longer promises a future update', () => {
+
+    const copy = describeSyncOutcome({ type: 'diverged' })
+
+    expect(copy.label).toBe('Sync paused')
+    expect(copy.detail).toContain('nothing was overwritten')
+    expect(copy.detail).toContain('Tap to review the differences.')
+    expect(copy.detail).not.toContain('next update')
+
+  })
+
   it('network-unreachable and graph-error are classified DIFFERENTLY from each other (the Phase 6 split)', () => {
 
     const offline = classifySyncOutcome({

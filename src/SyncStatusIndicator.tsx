@@ -11,9 +11,11 @@ import {
 import { describeSyncOutcome } from './syncOutcome'
 import { getDeviceLastSyncAt } from './deviceSyncTracking'
 import { formatRelativeTime } from './format'
+import { openResolutionScreen } from './syncResolutionStore'
 import {
   reduceSyncIndicatorState,
   canTriggerManualSync,
+  canReviewDifferencesFromBadge,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
   type SyncIconState,
@@ -266,6 +268,35 @@ export default function SyncStatusIndicator() {
     </>
 
   )
+
+  /*
+    Phase 6 - while this device and OneDrive disagree ('diverged', the
+    attention icon), the whole badge opens the resolution screen
+    instead. Same widened tap target as the manual-sync button below,
+    for the same reason; it never starts a sync itself.
+  */
+  if (canReviewDifferencesFromBadge(state.icon, outcome)) {
+    return (
+      <button
+        type="button"
+        className="sync-status-badge sync-status-badge-clickable"
+        aria-label="Review differences with OneDrive"
+        title="Review differences with OneDrive"
+        onClick={openResolutionScreen}
+      >
+        {state.icon && (
+          <span
+            className="sync-status-icon sync-status-icon-attention"
+            role="img"
+            aria-label="Needs attention"
+          />
+        )}
+        <span className="sync-status-text sync-status-text-attention">
+          {state.text?.label ?? 'Sync paused'} - tap to review
+        </span>
+      </button>
+    )
+  }
 
   /*
     Phase 8 (widened tap target) - the ENTIRE badge is the manual-sync

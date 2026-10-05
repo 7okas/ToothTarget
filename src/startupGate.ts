@@ -129,6 +129,13 @@ export type StartupGateView =
   | { kind: 'sign-in-prompt' }
   | { kind: 'syncing' }
   | { kind: 'success' }
+  /*
+    Phase 6 - this device and OneDrive both changed (the 'diverged'
+    outcome). Not a failure to retry: it needs the resolution screen, so
+    it gets its own view with "Review differences" and (always)
+    "Continue without syncing".
+  */
+  | { kind: 'diverged' }
   | { kind: 'error'; outcome: SyncOutcomeReason | null }
 
 export function computeStartupGateView(
@@ -150,7 +157,11 @@ export function computeStartupGateView(
   }
 
   if (state.phase === 'error') {
-    return { kind: 'error', outcome }
+
+    return outcome?.type === 'diverged'
+      ? { kind: 'diverged' }
+      : { kind: 'error', outcome }
+
   }
 
   return { kind: 'syncing' }

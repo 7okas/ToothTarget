@@ -3299,21 +3299,3 @@ button:disabled:hover {
   flex-direction: column;
   gap: var(--space-3);
 }
-
-.dev-launcher {
-  position: fixed;
-  left: var(--space-2);
-  bottom: var(--space-2);
-  z-index: 300;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  opacity: 0.85;
-}
-
-.dev-launcher button {
-  min-height: 36px;
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--text-xs);
-  background: var(--color-danger);
-}

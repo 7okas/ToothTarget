@@ -30,6 +30,7 @@ import { describe, expect, it } from 'vitest'
 import {
   reduceSyncIndicatorState,
   canTriggerManualSync,
+  canReviewDifferencesFromBadge,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
 } from './syncStatusIndicatorState'
@@ -425,6 +426,59 @@ describe('canTriggerManualSync - the "click the checkmark to sync now" guard (Ph
 
   it('refuses to trigger while a sync is actively running - no duplicate/conflicting sync queued on top of one in flight', () => {
     expect(canTriggerManualSync('syncing')).toBe(false)
+  })
+
+})
+
+describe('canReviewDifferencesFromBadge (Phase 6) - when the badge opens the resolution screen', () => {
+
+  it('true only for the attention icon with the diverged outcome', () => {
+
+    expect(canReviewDifferencesFromBadge('attention', { type: 'diverged' })).toBe(true)
+
+  })
+
+  it('false for every other attention outcome - they each have a different next step', () => {
+
+    for (const type of [
+      'not-signed-in',
+      'cloud-data-corrupted',
+      'patient-number-conflicts',
+      'review-needed',
+      'local-data-invalid',
+      'sign-in-denied',
+    ] as const) {
+      expect(canReviewDifferencesFromBadge('attention', { type })).toBe(false)
+    }
+
+  })
+
+  it('false for any other icon, even with a diverged outcome still stored', () => {
+
+    for (const icon of ['spinner', 'success', 'failure', null] as const) {
+      expect(canReviewDifferencesFromBadge(icon, { type: 'diverged' })).toBe(false)
+    }
+
+  })
+
+  it('false with no outcome', () => {
+
+    expect(canReviewDifferencesFromBadge('attention', null)).toBe(false)
+
+  })
+
+  it('after a resolution the outcome becomes synced, so the badge stops being a review button', () => {
+
+    const afterResolve = reduceSyncIndicatorState(
+      { icon: 'attention', text: null, hasCompletedOnce: true },
+      'idle',
+      'idle',
+      { type: 'synced' }
+    )
+
+    expect(afterResolve.icon).toBe('success')
+    expect(canReviewDifferencesFromBadge(afterResolve.icon, { type: 'synced' })).toBe(false)
+
   })
 
 })

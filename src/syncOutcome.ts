@@ -310,14 +310,15 @@ export const SYNC_OUTCOME_COPY: Record<SyncOutcomeType, SyncOutcomeCopy> = {
     cloudSyncEngine.ts's pushLocalSnapshot()/pullCloudSnapshot() for
     exactly where this is detected. Retrying automatically would just
     find the same disagreement again, so this needs a real decision -
-    Phase 6 adds the actual resolution path; for now this is purely
-    informational (no resolution UI exists yet).
+    Phase 6's resolution screen is that path: the badge (and the startup
+    gate) opens it, which is what the "Tap to review" wording below
+    refers to.
   */
   diverged: {
     label: 'Sync paused',
     detail:
       'This device and OneDrive both have changes; nothing was overwritten. ' +
-      'Resolution comes in the next update.',
+      'Tap to review the differences.',
     needsAttention: true,
   },
 

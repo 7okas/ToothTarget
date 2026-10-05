@@ -9,6 +9,10 @@ import {
   requestCloudPullIfSignedIn,
 } from './cloudSyncScheduler'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
+import {
+  openResolutionScreen,
+  subscribeResolutionResolved,
+} from './syncResolutionStore'
 import { describeSyncOutcome } from './syncOutcome'
 import {
   reduceStartupGateState,
@@ -149,6 +153,20 @@ export default function StartupGateScreen() {
     }
 
   }, [state.phase])
+
+  /*
+    Phase 6 - once a resolution completes, the divergence that was
+    holding this gate is gone: proceed, exactly like a clean gating sync
+    does (markStartupGatePassed() is a no-op if already passed). The
+    callback form keeps setState out of the effect body itself.
+  */
+  useEffect(() => {
+
+    return subscribeResolutionResolved(() => {
+      setState(current => markStartupGatePassed(current))
+    })
+
+  }, [])
 
   async function handleSignIn() {
 
@@ -301,6 +319,45 @@ export default function StartupGateScreen() {
             </p>
 
           </div>
+
+        )}
+
+        {view.kind === 'diverged' && (
+
+          <>
+
+            <span
+              className="startup-gate-icon startup-gate-icon-error"
+              role="img"
+              aria-hidden="true"
+            />
+
+            <h2 className="startup-gate-status-error">
+              This device and OneDrive both have changes
+            </h2>
+
+            <p>
+              Nothing was overwritten. Review what is different and choose
+              what to keep - nothing changes until you confirm.
+            </p>
+
+            <div className="startup-gate-actions">
+
+              <button type="button" onClick={openResolutionScreen}>
+                Review differences
+              </button>
+
+              <button
+                type="button"
+                className="startup-gate-secondary-button"
+                onClick={handleContinueWithoutSyncing}
+              >
+                Continue without syncing
+              </button>
+
+            </div>
+
+          </>
 
         )}
 

@@ -15,6 +15,7 @@ import {
 import { reconcileSyncedAccount, syncCloudNow } from './cloudSyncEngine'
 import { signOutWithBestEffortSync } from './cloudSyncSignOut'
 import { canTriggerManualSync } from './syncStatusIndicatorState'
+import { openSafetyCopiesScreen } from './syncResolutionStore'
 
 /*
   Plain, non-technical copy only - never a raw Graph/ETag error (those
@@ -286,6 +287,21 @@ export default function MicrosoftAccountSection() {
             disabled={isBusy}
           >
             {isBusy ? 'Signing In…' : 'Sign in with Microsoft'}
+          </button>
+
+        </div>
+
+      )}
+
+      {isReady && (
+
+        <div className="options-menu-list settings-actions">
+
+          <button
+            type="button"
+            onClick={openSafetyCopiesScreen}
+          >
+            Safety copies
           </button>
 
         </div>
