@@ -1491,6 +1491,23 @@ button:disabled:hover {
   box-shadow: var(--focus-ring);
 }
 
+.add-phase-duration-row select {
+  min-height: var(--control-height-sm);
+  padding: var(--space-2);
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-base);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.add-phase-duration-row select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+
 .options-menu-back-button {
   width: 100%;
   margin-top: var(--space-4);
@@ -1585,6 +1602,12 @@ button:disabled:hover {
 }
 
 .template-breadcrumb {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin: var(--space-1) 0 0 0;
+}
+
+.patient-case-type-label {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
   margin: var(--space-1) 0 0 0;

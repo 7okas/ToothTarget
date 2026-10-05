@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { Procedure } from './App'
+import type { Patient, Procedure } from './App'
 import {
   CLOUD_BACKUP_SCHEMA_VERSION,
   createCloudBackup,
@@ -89,6 +89,17 @@ function makeBuiltinProcedure(overrides: Partial<Procedure> = {}): Procedure {
   }
 }
 
+function makePatient(overrides: Partial<Patient> = {}): Patient {
+  return {
+    id: 'patient-1',
+    patientNumber: 1,
+    name: 'Jane Doe',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
 function makeBackup(overrides: Partial<CloudBackup> = {}): CloudBackup {
   return {
     schemaVersion: CLOUD_BACKUP_SCHEMA_VERSION,
@@ -172,6 +183,52 @@ describe('validateCloudBackup - procedure status backward compatibility', () => 
         customProcedures: [
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           makeProcedure({ status: 'deleted' as any }),
+        ],
+      })
+    )
+
+    expect(result.valid).toBe(false)
+
+  })
+
+})
+
+describe('validateCloudBackup - patient caseType backward compatibility (Phase 3)', () => {
+
+  it('accepts an older-shaped patient record (no caseType field at all)', () => {
+
+    const result = validateCloudBackup(
+      makeBackup({
+        patients: [makePatient()],
+      })
+    )
+
+    expect(result.valid).toBe(true)
+
+  })
+
+  it('accepts a patient explicitly marked Clinical or Practice', () => {
+
+    const result = validateCloudBackup(
+      makeBackup({
+        patients: [
+          makePatient({ id: 'patient-1', caseType: 'Clinical' }),
+          makePatient({ id: 'patient-2', caseType: 'Practice' }),
+        ],
+      })
+    )
+
+    expect(result.valid).toBe(true)
+
+  })
+
+  it('rejects a patient with an invalid caseType value', () => {
+
+    const result = validateCloudBackup(
+      makeBackup({
+        patients: [
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          makePatient({ caseType: 'Extracted' as any }),
         ],
       })
     )

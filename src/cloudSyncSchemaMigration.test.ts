@@ -364,3 +364,43 @@ describe('migrateCloudSyncDocumentShape - already up-to-date document', () => {
   })
 
 })
+
+describe('validateCloudSyncDocument - patient caseType (Phase 3 of the Sync & Statistics Redesign)', () => {
+
+  it('accepts an older-shaped patient record with no caseType field at all', () => {
+
+    const patientWithoutCaseType = makePatient()
+
+    const document = makeDocument({ patients: [patientWithoutCaseType] })
+
+    const validation = validateCloudSyncDocument(document)
+    expect(validation.valid).toBe(true)
+
+  })
+
+  it('accepts a patient explicitly marked Clinical or Practice', () => {
+
+    const document = makeDocument({
+      patients: [
+        makePatient({ id: 'patient-1', caseType: 'Clinical' }),
+        makePatient({ id: 'patient-2', caseType: 'Practice' }),
+      ],
+    })
+
+    const validation = validateCloudSyncDocument(document)
+    expect(validation.valid).toBe(true)
+
+  })
+
+  it('rejects a patient with an invalid caseType value', () => {
+
+    const document = makeDocument({
+      patients: [makePatient({ caseType: 'Extracted' })],
+    })
+
+    const validation = validateCloudSyncDocument(document)
+    expect(validation.valid).toBe(false)
+
+  })
+
+})

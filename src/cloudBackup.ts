@@ -163,6 +163,15 @@ export function createCloudBackup(): CloudBackup {
   accepting malformed data.
 */
 
+/*
+  caseType (Phase 3 of the Sync & Statistics Redesign) is optional,
+  exactly like status is for isValidCloudProcedure() below - an OLDER
+  backup file, written before this field existed, still validates
+  exactly as before; missing is itself the correct "treat as
+  Clinical" state (App.tsx's getPatientCaseType()). When present, it's
+  still constrained to the two real values.
+*/
+
 function isValidCloudPatient(value: unknown): value is Patient {
 
   return (
@@ -174,7 +183,10 @@ function isValidCloudPatient(value: unknown): value is Patient {
     Number.isInteger((value as Patient).patientNumber) &&
     (value as Patient).patientNumber > 0 &&
     typeof (value as Patient).name === 'string' &&
-    (value as Patient).name.trim() !== ''
+    (value as Patient).name.trim() !== '' &&
+    ((value as Patient).caseType === undefined ||
+      (value as Patient).caseType === 'Clinical' ||
+      (value as Patient).caseType === 'Practice')
   )
 
 }

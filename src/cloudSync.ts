@@ -78,6 +78,17 @@ export type CloudSyncDocument = {
   treatment (a same-id disagreement is still resolved purely by
   updatedAt, per cloudMerge.ts's pickWinningByUpdatedAt(); whichever
   record wins simply carries its own createdAt along for free).
+
+  caseType (Phase 3 of the Sync & Statistics Redesign) is OPTIONAL,
+  unlike every field above - deliberately, so a document written by
+  an older version of this app (before this field existed at all)
+  still validates exactly as before; missing is itself the correct,
+  permanent "treat as Clinical" state (see App.tsx's
+  getPatientCaseType()), not a schema-age gap cloudSyncSchemaMigration.ts
+  needs to backfill. When present, it's still constrained to the two
+  real values, so a genuinely corrupted value is still caught here -
+  matches this file's own isValidSyncProcedure()'s status field for
+  the same reasoning.
 */
 
 function isValidSyncPatient(value: unknown): value is Patient {
@@ -95,7 +106,10 @@ function isValidSyncPatient(value: unknown): value is Patient {
     typeof (value as Patient).createdAt === 'string' &&
     (value as Patient).createdAt.trim() !== '' &&
     typeof (value as Patient).updatedAt === 'string' &&
-    (value as Patient).updatedAt.trim() !== ''
+    (value as Patient).updatedAt.trim() !== '' &&
+    ((value as Patient).caseType === undefined ||
+      (value as Patient).caseType === 'Clinical' ||
+      (value as Patient).caseType === 'Practice')
   )
 
 }

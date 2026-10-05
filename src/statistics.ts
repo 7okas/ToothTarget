@@ -1,5 +1,6 @@
-import type { Procedure, ProcedureTemplate, SavedTreatment } from './App'
+import type { Patient, Procedure, ProcedureTemplate, SavedTreatment } from './App'
 import { getToothIdsForGroup, type ToothGroup } from './teeth'
+import { getPatientCaseType } from './patientCaseType'
 
 /*
   STATISTICS
@@ -112,6 +113,60 @@ export function applyStatisticsFilters(
     }
 
     return true
+
+  })
+
+}
+
+/*
+  CASE TYPE FILTER (Phase 3 of the Sync & Statistics Redesign)
+
+  Clinical vs Practice is a property of the PATIENT (App.tsx's
+  Patient.caseType), not the treatment - a treatment never stores or
+  decides this itself, so filtering by it means joining each
+  treatment back to its own patient by patientId first. A patient
+  missing caseType (every patient that existed before this field did)
+  resolves to 'Clinical', via patientCaseType.ts's shared
+  getPatientCaseType() - a standalone module with no import of its
+  own from App.tsx, so pulling it in here doesn't give this file any
+  actual runtime dependency on App.tsx (see this file's own header
+  comment). A treatment whose patientId no longer resolves to any
+  living patient record (eg. a deleted patient) gets the same
+  'Clinical' default rather than being silently dropped from every
+  case-type-filtered view.
+
+  Deliberately a separate filtering step from applyStatisticsFilters()
+  above, rather than a new StatisticsFilters field - that filter
+  engine is the "manual-selection mode" (procedure/tooth/template/
+  date) this phase is explicitly not allowed to touch; a caller runs
+  this FIRST, over the full treatment list, then hands the result to
+  applyStatisticsFilters() exactly as before.
+*/
+
+export type CaseTypeFilter = 'clinical' | 'practice' | 'both'
+
+export function filterTreatmentsByCaseType(
+  treatments: SavedTreatment[],
+  patients: Patient[],
+  caseTypeFilter: CaseTypeFilter
+): SavedTreatment[] {
+
+  if (caseTypeFilter === 'both') {
+    return treatments
+  }
+
+  const patientsById = new Map(
+    patients.map(patient => [patient.id, patient])
+  )
+
+  return treatments.filter(treatment => {
+
+    const caseType =
+      getPatientCaseType(patientsById.get(treatment.patientId))
+
+    return caseTypeFilter === 'clinical'
+      ? caseType === 'Clinical'
+      : caseType === 'Practice'
 
   })
 

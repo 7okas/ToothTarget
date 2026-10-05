@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Procedure, ProcedureTemplate, SavedTreatment } from './App'
+import type { Patient, Procedure, ProcedureTemplate, SavedTreatment } from './App'
 import BackButton from './BackButton'
 import TimeTrendChart from './TimeTrendChart'
 import ToothChart from './ToothChart'
@@ -8,6 +8,7 @@ import { getToothLabel, getToothById, TOOTH_GROUPS, type ToothGroup } from './te
 import {
   ALL_TREATMENTS_FILTER,
   applyStatisticsFilters,
+  filterTreatmentsByCaseType,
   resolveToothSelection,
   resolveDateRangePreset,
   DATE_RANGE_PRESETS,
@@ -23,12 +24,20 @@ import {
   type StatisticsFilters,
   type DateRangePresetId,
   type ProcedureFilterOption,
+  type CaseTypeFilter,
 } from './statistics'
 
 const MIN_SAMPLE_SIZE = 3
 
+const CASE_TYPE_FILTER_OPTIONS: { id: CaseTypeFilter; label: string }[] = [
+  { id: 'clinical', label: 'Clinical' },
+  { id: 'practice', label: 'Practice' },
+  { id: 'both', label: 'Both' },
+]
+
 type StatisticsScreenProps = {
   treatments: SavedTreatment[]
+  patients: Patient[]
   procedures: Procedure[]
   templates: ProcedureTemplate[]
   onBack: () => void
@@ -112,10 +121,28 @@ function describeSelection(
 
 function StatisticsScreen({
   treatments,
+  patients,
   procedures,
   templates,
   onBack,
 }: StatisticsScreenProps) {
+
+  /*
+    CASE TYPE FILTER (Phase 3) - defaults to Clinical-only, per this
+    phase's own spec ("the preset/readymade statistics default to
+    Clinical only"). Deliberately its own, separate piece of state
+    from everything below: it's applied to `treatments` BEFORE the
+    manual-selection filter engine (applyStatisticsFilters()) ever
+    sees them, so that engine - and every one of its own
+    procedure/tooth/template pickers below - stays completely
+    untouched by this phase.
+  */
+
+  const [caseTypeFilter, setCaseTypeFilter] =
+    useState<CaseTypeFilter>('clinical')
+
+  const caseTypeFilteredTreatments =
+    filterTreatmentsByCaseType(treatments, patients, caseTypeFilter)
 
   /*
     MAIN FILTER STATE
@@ -254,10 +281,10 @@ function StatisticsScreen({
         }
 
   const filteredTreatments =
-    applyStatisticsFilters(treatments, filters)
+    applyStatisticsFilters(caseTypeFilteredTreatments, filters)
 
   const procedureOptions =
-    calculateProcedureFilterOptions(treatments)
+    calculateProcedureFilterOptions(caseTypeFilteredTreatments)
 
   /*
     Template filter options are scoped to whatever procedure/tooth
@@ -268,7 +295,7 @@ function StatisticsScreen({
   */
 
   const treatmentsForTemplateOptions =
-    applyStatisticsFilters(treatments, {
+    applyStatisticsFilters(caseTypeFilteredTreatments, {
       ...filters,
       templateIds: null,
     })
@@ -387,7 +414,7 @@ function StatisticsScreen({
         }
 
   const compareFilteredTreatments =
-    applyStatisticsFilters(treatments, compareFilters)
+    applyStatisticsFilters(caseTypeFilteredTreatments, compareFilters)
 
   const compareStats =
     calculateTreatmentStatistics(compareFilteredTreatments)
@@ -426,6 +453,34 @@ function StatisticsScreen({
       <div className="stats-page">
 
         {/* FILTERS */}
+
+        <div className="stats-filter-group">
+
+          <p className="stats-filter-group-label">Case Type</p>
+
+          <div className="stats-filter-bar">
+
+            {CASE_TYPE_FILTER_OPTIONS.map(option => (
+
+              <button
+                key={option.id}
+                type="button"
+                className={`stats-filter-button ${
+                  caseTypeFilter === option.id
+                    ? 'stats-filter-active'
+                    : ''
+                }`}
+                onClick={() => setCaseTypeFilter(option.id)}
+              >
+                {option.label}
+              </button>
+
+            ))}
+
+          </div>
+
+        </div>
+
 
         <div className="stats-filter-group">
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type {
+  Patient,
   PhaseRecord,
   PhaseStatus,
   Procedure,
@@ -9,6 +10,7 @@ import type {
 import {
   ALL_TREATMENTS_FILTER,
   applyStatisticsFilters,
+  filterTreatmentsByCaseType,
   resolveToothSelection,
   resolveDateRangePreset,
   calculateAverageTreatmentTime,
@@ -426,6 +428,108 @@ describe('calculateOvertimeStatistics - overall and by-procedure/by-phase overti
     expect(stats.largestOvertimeDuration).toBeNull()
     expect(stats.byProcedure).toEqual([])
     expect(stats.byPhase).toEqual([])
+
+  })
+
+})
+
+
+function makePatient(overrides: Partial<Patient> = {}): Patient {
+
+  return {
+    id: 'patient-1',
+    patientNumber: 1,
+    name: 'Jane Doe',
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z',
+    ...overrides,
+  }
+
+}
+
+describe('filterTreatmentsByCaseType - Phase 3 (Clinical/Practice)', () => {
+
+  const clinicalPatient = makePatient({
+    id: 'patient-clinical',
+    caseType: 'Clinical',
+  })
+
+  const practicePatient = makePatient({
+    id: 'patient-practice',
+    caseType: 'Practice',
+  })
+
+  const legacyPatient = makePatient({
+    id: 'patient-legacy',
+    // No caseType at all - predates this field.
+  })
+
+  const patients = [clinicalPatient, practicePatient, legacyPatient]
+
+  const clinicalTreatment = makeTreatment({
+    id: 'clinical-treatment',
+    patientId: clinicalPatient.id,
+  })
+
+  const practiceTreatment = makeTreatment({
+    id: 'practice-treatment',
+    patientId: practicePatient.id,
+  })
+
+  const legacyTreatment = makeTreatment({
+    id: 'legacy-treatment',
+    patientId: legacyPatient.id,
+  })
+
+  const orphanedTreatment = makeTreatment({
+    id: 'orphaned-treatment',
+    patientId: 'patient-deleted-long-ago',
+  })
+
+  const all = [
+    clinicalTreatment,
+    practiceTreatment,
+    legacyTreatment,
+    orphanedTreatment,
+  ]
+
+  it('"both" returns every treatment unfiltered', () => {
+    expect(filterTreatmentsByCaseType(all, patients, 'both')).toEqual(all)
+  })
+
+  it('"clinical" keeps only treatments whose patient is Clinical, treating a patient missing caseType (or missing entirely) as Clinical', () => {
+
+    const result = filterTreatmentsByCaseType(all, patients, 'clinical')
+
+    expect(result.map(t => t.id).sort()).toEqual([
+      'clinical-treatment',
+      'legacy-treatment',
+      'orphaned-treatment',
+    ])
+
+  })
+
+  it('"practice" keeps only treatments whose patient is explicitly Practice', () => {
+
+    const result = filterTreatmentsByCaseType(all, patients, 'practice')
+
+    expect(result.map(t => t.id)).toEqual(['practice-treatment'])
+
+  })
+
+  it('a treatment whose patientId no longer resolves to any known patient defaults to Clinical, same as a missing caseType', () => {
+
+    const result = filterTreatmentsByCaseType(
+      [orphanedTreatment],
+      patients,
+      'clinical'
+    )
+
+    expect(result).toEqual([orphanedTreatment])
+
+    expect(
+      filterTreatmentsByCaseType([orphanedTreatment], patients, 'practice')
+    ).toEqual([])
 
   })
 

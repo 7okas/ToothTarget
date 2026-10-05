@@ -38,6 +38,11 @@ import {
 import { planPatientDeletionCascade } from './patientDeletionCascade'
 import { applyPatientRenameToSavedTreatments } from './patientRenameCascade'
 import {
+  getPatientCaseType,
+  PATIENT_CASE_TYPES,
+  type PatientCaseType,
+} from './patientCaseType'
+import {
   requestCloudSync,
   requestCloudSyncIfSignedIn,
   getPendingStaleReview,
@@ -240,6 +245,22 @@ export type Patient = {
     change bumps updatedAt" principle this field has always followed.
   */
   updatedAt: string
+  /*
+    Phase 3 of the Sync & Statistics Redesign - Clinical (real
+    patient work) vs Practice (extracted-teeth practice work), set
+    from a two-value dropdown on the Patient screen. Deliberately
+    OPTIONAL, not backfilled by any migration: a patient that
+    predates this field simply has no stored opinion, and every
+    reader treats that absence as 'Clinical' (see
+    patientCaseType.ts's getPatientCaseType()) rather than this app
+    ever writing a guessed value into old records. New patients get
+    it set explicitly to 'Clinical' at creation time
+    (allocatePatientUnderLock()), same as every other field a
+    dropdown defaults - editing it (editPatientRecordUnderLock())
+    bumps updatedAt exactly like a name/number edit does, so cloud
+    merge/sync treats it like any other intentional content change.
+  */
+  caseType?: PatientCaseType
 }
 
 /*
@@ -1477,6 +1498,15 @@ type PatientDraft = {
     recoverable for data that predates this field).
   */
   createdAt?: string
+  /*
+    Phase 3 - carried through unchanged if the persisted entry already
+    has a valid one, left undefined otherwise. Unlike updatedAt/
+    createdAt above, a missing caseType is never backfilled by any
+    later pass - undefined is itself the correct, permanent "missing
+    means Clinical" state (see getPatientCaseType()), not a temporary
+    placeholder waiting on a follow-up migration.
+  */
+  caseType?: PatientCaseType
 }
 
 type PatientMigrationInput = {
@@ -1522,6 +1552,20 @@ function readStoredPatientNumber(value: unknown): number | undefined {
     value > 0
     ? value
     : undefined
+
+}
+
+/*
+  Reads an already-stored caseType, if it's one of the two valid
+  values - anything else (missing, from before this field existed, or
+  corrupted) is left undefined, which getPatientCaseType() then reads
+  as 'Clinical'. Mirrors readStoredPatientNumber() above exactly.
+*/
+function readStoredPatientCaseType(
+  value: unknown
+): PatientCaseType | undefined {
+
+  return value === 'Clinical' || value === 'Practice' ? value : undefined
 
 }
 
@@ -1612,6 +1656,9 @@ function migratePatientIdentity({
             typeof rawCreatedAt === 'string' && rawCreatedAt.trim() !== ''
               ? rawCreatedAt
               : undefined,
+          caseType: readStoredPatientCaseType(
+            (entry as { caseType?: unknown }).caseType
+          ),
         })
 
       }
@@ -1728,6 +1775,7 @@ function migratePatientIdentity({
           name: patient.name,
           createdAt: patient.createdAt ?? '',
           updatedAt: patient.updatedAt ?? '',
+          caseType: patient.caseType,
         }
 
       }
@@ -1744,6 +1792,7 @@ function migratePatientIdentity({
         name: patient.name,
         createdAt: patient.createdAt ?? '',
         updatedAt: patient.updatedAt ?? '',
+        caseType: patient.caseType,
       }
 
     })
@@ -2551,6 +2600,13 @@ function allocatePatientUnderLock(cleanName: string): PatientAllocationResult {
     name: cleanName,
     createdAt,
     updatedAt: createdAt,
+    /*
+      Phase 3 - every brand-new patient gets an explicit 'Clinical',
+      matching the dropdown's own default, rather than being left
+      undefined (undefined is reserved for patients that predate this
+      field - see the Patient type's own comment).
+    */
+    caseType: 'Clinical',
   }
 
   const updatedPatients = [...currentPatients, newPatient]
@@ -2760,7 +2816,8 @@ export type PatientEditResult =
 function editPatientRecordUnderLock(
   patientId: string,
   newName: string,
-  newPatientNumber: number
+  newPatientNumber: number,
+  newCaseType: PatientCaseType
 ): PatientEditResult {
 
   const currentPatients = readPersistedPatients()
@@ -2803,7 +2860,8 @@ function editPatientRecordUnderLock(
 
   if (
     existingPatient.name === cleanName &&
-    existingPatient.patientNumber === newPatientNumber
+    existingPatient.patientNumber === newPatientNumber &&
+    getPatientCaseType(existingPatient) === newCaseType
   ) {
 
     return {
@@ -2823,6 +2881,7 @@ function editPatientRecordUnderLock(
             ...patient,
             name: cleanName,
             patientNumber: newPatientNumber,
+            caseType: newCaseType,
             updatedAt: nowIso,
           }
         : patient
@@ -2887,7 +2946,8 @@ function editPatientRecordUnderLock(
 async function editPatientRecord(
   patientId: string,
   newName: string,
-  newPatientNumber: number
+  newPatientNumber: number,
+  newCaseType: PatientCaseType
 ): Promise<PatientEditResult> {
 
   if (
@@ -2898,7 +2958,13 @@ async function editPatientRecord(
 
     return navigator.locks.request(
       PATIENT_ALLOCATION_LOCK_NAME,
-      () => editPatientRecordUnderLock(patientId, newName, newPatientNumber)
+      () =>
+        editPatientRecordUnderLock(
+          patientId,
+          newName,
+          newPatientNumber,
+          newCaseType
+        )
     )
 
   }
@@ -2908,7 +2974,12 @@ async function editPatientRecord(
     allocatePatient() above uses.
   */
 
-  return editPatientRecordUnderLock(patientId, newName, newPatientNumber)
+  return editPatientRecordUnderLock(
+    patientId,
+    newName,
+    newPatientNumber,
+    newCaseType
+  )
 
 }
 
@@ -3361,6 +3432,9 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
 
   const [editPatientNumberInput, setEditPatientNumberInput] =
     useState('')
+
+  const [editPatientCaseType, setEditPatientCaseType] =
+    useState<PatientCaseType>('Clinical')
 
   const [editPatientError, setEditPatientError] =
     useState<string | null>(null)
@@ -6619,6 +6693,7 @@ async function openPatient(
   function requestEditPatient(patient: Patient) {
     setEditPatientName(patient.name)
     setEditPatientNumberInput(String(patient.patientNumber))
+    setEditPatientCaseType(getPatientCaseType(patient))
     setEditPatientError(null)
     setShowEditPatient(true)
   }
@@ -6635,7 +6710,12 @@ async function openPatient(
     setEditPatientBusy(true)
 
     const result =
-      await editPatientRecord(patientId, editPatientName, parsedNumber)
+      await editPatientRecord(
+        patientId,
+        editPatientName,
+        parsedNumber,
+        editPatientCaseType
+      )
 
     setEditPatientBusy(false)
 
@@ -8442,6 +8522,11 @@ const patientTreatments =
             <h1>
               {selectedPatient}
             </h1>
+            {selectedPatientRecord && (
+              <p className="patient-case-type-label">
+                Case type: {getPatientCaseType(selectedPatientRecord)}
+              </p>
+            )}
           </div>
 
         </div>
@@ -8756,6 +8841,32 @@ const patientTreatments =
                     event => setEditPatientNumberInput(event.target.value)
                   }
                 />
+
+              </div>
+
+              <div
+                className="add-phase-duration-row"
+              >
+
+                <label>
+                  Case type
+                </label>
+
+                <select
+                  value={editPatientCaseType}
+                  onChange={
+                    event =>
+                      setEditPatientCaseType(
+                        event.target.value as PatientCaseType
+                      )
+                  }
+                >
+                  {PATIENT_CASE_TYPES.map(caseType => (
+                    <option key={caseType} value={caseType}>
+                      {caseType}
+                    </option>
+                  ))}
+                </select>
 
               </div>
 
@@ -11186,6 +11297,7 @@ const patientTreatments =
 
       <StatisticsScreen
         treatments={savedTreatments}
+        patients={savedPatients}
         procedures={procedures}
         templates={templates}
         onBack={() => setScreen('home')}
