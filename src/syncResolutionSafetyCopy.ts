@@ -88,6 +88,13 @@ export type ResolutionSafetyCopy = {
 export type LocalSafetyCopyEntry = {
   resolutionId: string
   capturedAt: string
+  /*
+    Absent on a normal resolution entry. 'before-restore' marks the
+    copy of this device's own data saved right before a Restore replaced
+    it (syncResolutionRestore.ts); there `device` and `cloud` hold the
+    same snapshot, since only this device's data is being protected.
+  */
+  reason?: 'before-restore'
   cloudETag: string | null
   device: CloudSyncDocument
   cloud: CloudSyncDocument

@@ -1079,6 +1079,59 @@ export function recordCloudMatchesLocal(
 }
 
 /*
+  PHASE 6 - RESTORE FROM A SAFETY COPY
+
+  Replaces this device's five synced collections with `document`
+  (templates keep this device's built-ins, the next patient number is
+  reconciled upward) and touches NO sync-tracking value: not the known
+  cloud version, not the change counter. The caller (syncResolutionRestore.ts)
+  then marks local data as having unsynced changes, so the normal sync
+  flow decides what happens next - push if OneDrive hasn't moved,
+  'diverged' (and the resolution screen) if it has.
+*/
+export function replaceLocalSyncedData(document: CloudSyncDocument): void {
+
+  localStorage.setItem(PATIENTS_KEY, JSON.stringify(document.patients))
+
+  localStorage.setItem(
+    SAVED_TREATMENTS_KEY,
+    JSON.stringify(document.savedTreatments)
+  )
+
+  const builtInTemplates =
+    (readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[])
+      .filter(template => template.isCustom === false)
+
+  localStorage.setItem(
+    TEMPLATES_KEY,
+    JSON.stringify([...builtInTemplates, ...document.customTemplates])
+  )
+
+  localStorage.setItem(
+    PROCEDURES_KEY,
+    JSON.stringify(document.customProcedures)
+  )
+
+  const highestAssignedPatientNumber =
+    document.patients.reduce(
+      (highest, patient) =>
+        patient.patientNumber > highest ? patient.patientNumber : highest,
+      0
+    )
+
+  const reconciledNextPatientNumber = Math.max(
+    readPersistedNextPatientNumber(),
+    highestAssignedPatientNumber + 1
+  )
+
+  localStorage.setItem(
+    NEXT_PATIENT_NUMBER_KEY,
+    JSON.stringify(reconciledNextPatientNumber)
+  )
+
+}
+
+/*
   RESULT TYPE
 */
 

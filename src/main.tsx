@@ -5,6 +5,9 @@ import App from './App.tsx'
 import SyncStatusIndicator from './SyncStatusIndicator.tsx'
 import StartupGateScreen from './StartupGateScreen.tsx'
 import CloudCorruptionRecoveryDialog from './CloudCorruptionRecoveryDialog.tsx'
+import SyncResolutionScreen from './SyncResolutionScreen.tsx'
+import SafetyCopiesScreen from './SafetyCopiesScreen.tsx'
+import DevResolutionLauncher from './DevResolutionLauncher.tsx'
 import { initializeMsal } from './auth.ts'
 
 /*
@@ -26,6 +29,9 @@ initializeMsal().finally(() => {
       <App />
       <StartupGateScreen />
       <CloudCorruptionRecoveryDialog />
+      <SyncResolutionScreen />
+      <SafetyCopiesScreen />
+      {import.meta.env.DEV && <DevResolutionLauncher />}
     </StrictMode>,
   )
 

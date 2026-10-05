@@ -12,7 +12,9 @@
       listens for, so it can proceed once the dentist has resolved
       the divergence that was holding it.
 
-  No sync logic and no I/O here, and nothing mounts or opens this yet.
+  Also holds whether the safety-copies list (Restore) screen is open.
+
+  No sync logic and no I/O here.
 */
 
 let open = false
@@ -76,9 +78,53 @@ export function notifyResolutionResolved(): void {
 
 }
 
+/* ---------- safety-copies (Restore) screen ---------- */
+
+let safetyCopiesOpen = false
+
+const safetyCopiesListeners = new Set<() => void>()
+
+export function getSafetyCopiesScreenOpen(): boolean {
+  return safetyCopiesOpen
+}
+
+export function subscribeSafetyCopiesScreen(listener: () => void): () => void {
+
+  safetyCopiesListeners.add(listener)
+
+  return () => {
+    safetyCopiesListeners.delete(listener)
+  }
+
+}
+
+function setSafetyCopiesOpen(next: boolean): void {
+
+  if (next === safetyCopiesOpen) {
+    return
+  }
+
+  safetyCopiesOpen = next
+
+  for (const listener of safetyCopiesListeners) {
+    listener()
+  }
+
+}
+
+export function openSafetyCopiesScreen(): void {
+  setSafetyCopiesOpen(true)
+}
+
+export function closeSafetyCopiesScreen(): void {
+  setSafetyCopiesOpen(false)
+}
+
 /* TEST-ONLY - never called from production code. */
 export function __resetResolutionStoreForTests(): void {
   open = false
+  safetyCopiesOpen = false
+  safetyCopiesListeners.clear()
   openListeners.clear()
   resolvedListeners.clear()
 }

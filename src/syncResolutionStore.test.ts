@@ -7,6 +7,10 @@ import {
   closeResolutionScreen,
   subscribeResolutionResolved,
   notifyResolutionResolved,
+  getSafetyCopiesScreenOpen,
+  subscribeSafetyCopiesScreen,
+  openSafetyCopiesScreen,
+  closeSafetyCopiesScreen,
   __resetResolutionStoreForTests,
 } from './syncResolutionStore'
 
@@ -92,6 +96,30 @@ describe('resolution resolved event', () => {
     closeResolutionScreen()
 
     expect(resolved).not.toHaveBeenCalled()
+
+  })
+
+})
+
+describe('safety-copies screen store', () => {
+
+  it('opens and closes independently of the resolution screen, notifying only on change', () => {
+
+    const listener = vi.fn()
+    subscribeSafetyCopiesScreen(listener)
+
+    expect(getSafetyCopiesScreenOpen()).toBe(false)
+
+    openSafetyCopiesScreen()
+    openSafetyCopiesScreen()
+
+    expect(getSafetyCopiesScreenOpen()).toBe(true)
+    expect(getResolutionScreenOpen()).toBe(false)
+
+    closeSafetyCopiesScreen()
+
+    expect(getSafetyCopiesScreenOpen()).toBe(false)
+    expect(listener).toHaveBeenCalledTimes(2)
 
   })
 
