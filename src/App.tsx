@@ -44,7 +44,7 @@ import {
 } from './patientCaseType'
 import {
   requestCloudSync,
-  requestCloudSyncIfSignedIn,
+  requestCloudPullIfSignedIn,
   getPendingStaleReview,
   subscribePendingStaleReview,
   resumeSyncAfterStaleReview,
@@ -4447,12 +4447,18 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
 
 
   /*
-    AUTOMATIC SYNC ON APP LOAD (Phase 2)
+    AUTOMATIC PULL ON APP LOAD (Phase 2; Phase 5 - single-writer sync
+    model - now a PULL, not a push)
 
-    Fires once, on mount, but only ever requests a sync if a Microsoft
+    Fires once, on mount, but only ever requests a pull if a Microsoft
     account is already active - a dentist who has never signed in gets
     zero sync activity from this effect, not even an attempted-and-
-    failed one (see requestCloudSyncIfSignedIn()'s own comment).
+    failed one (see requestCloudPullIfSignedIn()'s own comment).
+    Pulling (rather than pushing) is what establishes this device's
+    starting point from the cloud - cloudSyncEngine.ts's
+    pullCloudSnapshot() already falls through to a push on its own
+    whenever that's actually the safe/correct thing to do (local ahead
+    of an unmoved cloud, or no cloud document yet).
 
     Ordering: this must never run before the migration effect above
     has finished, since a sync validates local data against the
@@ -4505,7 +4511,7 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
       return
     }
 
-    requestCloudSyncIfSignedIn(Boolean(account))
+    requestCloudPullIfSignedIn(Boolean(account))
 
   }, [])
 

@@ -1,4 +1,9 @@
-import { syncCloudNow, type CloudSyncResult } from './cloudSyncEngine'
+import {
+  syncCloudNow,
+  pullCloudSnapshot,
+  markLocalDataDirty,
+  type CloudSyncResult,
+} from './cloudSyncEngine'
 import type { StaleReviewCandidate } from './staleRecordReview'
 import { classifySyncOutcome, type SyncOutcomeReason } from './syncOutcome'
 import { maybeRotateBackup } from './cloudBackupRotation'
@@ -81,15 +86,32 @@ import { maybeRotateBackup } from './cloudBackupRotation'
 */
 
 let running = false
-let pending = false
 let microtaskQueued = false
+
+/*
+  Phase 5 (single-writer sync model) - replaces the old plain boolean
+  `pending` flag with an operation KIND, since there are now two
+  genuinely different things to request: 'push' (requestCloudSync(),
+  called after a synchronized-data mutation - the vast majority of
+  triggers) and 'pull' (requestCloudPullIfSignedIn(), called only at
+  app open and a fresh sign-in/gate retry - see those functions' own
+  comments). 'pull' always wins when both are pending at once: pulling
+  first establishes the correct baseline a push should build on, and
+  pullCloudSnapshot() itself already falls through to a push whenever
+  that's actually the safe thing to do (local ahead of an unmoved
+  cloud) - see cloudSyncEngine.ts's own pullCloudSnapshot() comment.
+*/
+let pendingOperation: 'none' | 'push' | 'pull' = 'none'
 
 /*
   Consumed by exactly one sync attempt - see resumeSyncAfterStaleReview()
   below and PerformSyncOptions's own comment in cloudSyncEngine.ts for
-  the full reasoning. Read-and-cleared at the moment an attempt actually
-  starts (inside startIfIdle(), not when it's set), so it can never leak
-  into a later, unrelated attempt.
+  the full reasoning. Phase 5 note: the stale-review gate this flag
+  used to skip is no longer reachable through either pushLocalSnapshot()
+  or pullCloudSnapshot() at all, so this is no longer READ by
+  startIfIdle() below - kept set-but-unused (never deleted) per this
+  phase's own instruction not to remove Phase 4.7's stale-review
+  machinery yet; resumeSyncAfterStaleReview() still toggles it.
 */
 let skipStaleReviewCheckOnce = false
 
@@ -322,26 +344,36 @@ function startIfIdle(): void {
   if (running) {
     /*
       A sync is already in flight (started by an earlier microtask
-      flush). Leave `pending` as-is - the running sync's own
+      flush). Leave `pendingOperation` as-is - the running sync's own
       .finally() below will notice it and schedule another flush once
       it completes.
     */
     return
   }
 
-  if (!pending) {
+  if (pendingOperation === 'none') {
     return
   }
 
-  pending = false
+  const operation = pendingOperation
+  pendingOperation = 'none'
   running = true
 
-  const skipStaleReviewCheck = skipStaleReviewCheckOnce
+  /*
+    Still consumed exactly once per resumed attempt, exactly as before
+    (see this variable's own declaration comment) - no longer changes
+    which function runs below, but resumeSyncAfterStaleReview()'s own
+    "set once, read by the very next attempt" contract stays true
+    rather than silently leaking into some later, unrelated attempt.
+  */
+  void skipStaleReviewCheckOnce
   skipStaleReviewCheckOnce = false
 
   setStatus('syncing')
 
-  syncCloudNow(skipStaleReviewCheck ? { skipStaleReviewCheck: true } : undefined)
+  const attempt = operation === 'pull' ? pullCloudSnapshot() : syncCloudNow()
+
+  attempt
     .then(
       result => {
 
@@ -407,11 +439,12 @@ function startIfIdle(): void {
 
       running = false
 
-      if (pending) {
+      if (pendingOperation !== 'none') {
         /*
-          Another meaningful mutation arrived while this sync was
-          running - reflect that immediately rather than briefly
-          showing 'idle'/'unavailable' before the next run starts.
+          Another meaningful mutation (or a pull trigger) arrived while
+          this attempt was running - reflect that immediately rather
+          than briefly showing 'idle'/'unavailable' before the next run
+          starts.
         */
         setStatus('pending')
         scheduleFlush()
@@ -431,11 +464,26 @@ function startIfIdle(): void {
   anywhere, at any time - it never throws, never blocks the caller,
   and never opens a login prompt on its own (see auth.ts's
   getAccessToken() for where that's actually enforced).
+
+  Phase 5 (single-writer sync model) - also marks local data dirty
+  (cloudSyncEngine.ts's markLocalDataDirty()), since every one of this
+  function's own call sites IS exactly the "a synchronized mutation
+  just happened" moment that flag exists to track - no separate call
+  site needed anywhere else for that (see markLocalDataDirty()'s own
+  comment). Only ever requests a PUSH; if a 'pull' is already pending
+  (app just opened/signed in and hasn't run yet), that stays pending as
+  'pull' - establishing the correct baseline first is always at least
+  as safe as pushing immediately, and pullCloudSnapshot() itself
+  already falls through to a push whenever that's the right call.
 */
 
 export function requestCloudSync(): void {
 
-  pending = true
+  markLocalDataDirty()
+
+  if (pendingOperation === 'none') {
+    pendingOperation = 'push'
+  }
 
   if (!running) {
     setStatus('pending')
@@ -471,16 +519,18 @@ export function resumeSyncAfterStaleReview(): void {
 
 /*
   Call this from a trigger that has no synchronized-data mutation of
-  its own to report - app load, and a fresh Microsoft sign-in (see
-  App.tsx's post-migration effect and MicrosoftAccountSection.tsx's
-  handleSignIn()). Both of those only want to reconcile with the cloud
-  IF a Microsoft account is actually signed in; neither should ever
-  start (or even schedule) a sync attempt for a dentist who has never
-  connected one - not a console log, not a status transition, nothing.
-  Takes a plain boolean rather than an account/MSAL type so this
-  module stays free of any dependency on auth.ts - the caller already
-  knows whether it has an account (getActiveAccount() truthy, or a
-  just-succeeded sign-in) and just reports that one fact here.
+  its own to report, and no cloud baseline to establish either - just
+  "try a push now if one isn't already going to happen on its own".
+  Phase 5 (single-writer sync model) narrowed this to its one
+  remaining caller, cloudSyncOnlineRetry.ts's 'online'-event listener:
+  reconnecting never itself changes which account is signed in or
+  invalidates whatever this device already knew about the cloud, so a
+  plain push (flushing anything that piled up while offline) is
+  exactly right - unlike app load/a fresh sign-in, which both want
+  requestCloudPullIfSignedIn() below instead. Takes a plain boolean
+  rather than an account/MSAL type so this module stays free of any
+  dependency on auth.ts - the caller already knows whether it has an
+  account and just reports that one fact here.
 */
 
 export function requestCloudSyncIfSignedIn(isSignedIn: boolean): void {
@@ -492,13 +542,46 @@ export function requestCloudSyncIfSignedIn(isSignedIn: boolean): void {
 }
 
 /*
+  Call this from a trigger that wants to establish/re-establish this
+  device's starting point from the cloud rather than push a mutation -
+  app open (App.tsx's own effect) and a fresh Microsoft sign-in
+  (MicrosoftAccountSection.tsx's handleSignIn(), and
+  StartupGateScreen.tsx's handleSignIn()/handleRetry(), since the
+  gate's own gating attempt is always a pull under this model - see
+  cloudSyncEngine.ts's pullCloudSnapshot()). Same sign-in guard and
+  same reasoning as requestCloudSyncIfSignedIn() above: a dentist who
+  has never connected a Microsoft account gets zero sync activity from
+  either.
+
+  Always sets 'pull', even overriding an already-pending 'push' - see
+  the pendingOperation variable's own comment above for why that's
+  always the safe choice.
+*/
+
+export function requestCloudPullIfSignedIn(isSignedIn: boolean): void {
+
+  if (!isSignedIn) {
+    return
+  }
+
+  pendingOperation = 'pull'
+
+  if (!running) {
+    setStatus('pending')
+  }
+
+  scheduleFlush()
+
+}
+
+/*
   TEST-ONLY - resets this module's internal scheduling state between
   test cases. Never called from production code.
 */
 
 export function __resetCloudSyncSchedulerForTests(): void {
   running = false
-  pending = false
+  pendingOperation = 'none'
   microtaskQueued = false
   status = 'idle'
   skipStaleReviewCheckOnce = false

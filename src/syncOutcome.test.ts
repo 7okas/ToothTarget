@@ -239,6 +239,20 @@ describe('classifySyncOutcome - every CloudSyncResult status maps to its own dis
 
   })
 
+  it('diverged (Phase 5 - local and cloud both changed independently): "diverged", needs attention', () => {
+
+    const result: CloudSyncResult = {
+      status: 'diverged',
+      detail: 'local has unsynced changes and the cloud moved independently',
+    }
+
+    expect(classifySyncOutcome(result)).toEqual({ type: 'diverged' })
+    expect(
+      describeSyncOutcome(classifySyncOutcome(result)).needsAttention
+    ).toBe(true)
+
+  })
+
   it('network-unreachable and graph-error are classified DIFFERENTLY from each other (the Phase 6 split)', () => {
 
     const offline = classifySyncOutcome({
@@ -325,6 +339,7 @@ describe('SYNC_OUTCOME_COPY - every reason has real, distinct, non-technical wor
     expect(needsAttentionTypes).toEqual(
       [
         'cloud-data-corrupted',
+        'diverged',
         'local-data-invalid',
         'not-signed-in',
         'patient-number-conflicts',

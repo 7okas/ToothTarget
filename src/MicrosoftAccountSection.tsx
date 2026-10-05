@@ -10,6 +10,7 @@ import {
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
   requestCloudSync,
+  requestCloudPullIfSignedIn,
 } from './cloudSyncScheduler'
 import { reconcileSyncedAccount, syncCloudNow } from './cloudSyncEngine'
 import { signOutWithBestEffortSync } from './cloudSyncSignOut'
@@ -164,12 +165,16 @@ export default function MicrosoftAccountSection() {
       }
 
       /*
-        Phase 2: a fresh sign-in is one of the two new automatic sync
+        Phase 2: a fresh sign-in is one of the two automatic sync
         triggers (the other is app load, see App.tsx) - reconcile with
         the cloud immediately rather than waiting for the next
-        unrelated patient/treatment/template mutation.
+        unrelated patient/treatment/template mutation. Phase 5
+        (single-writer sync model): a PULL, not a push - establishing
+        this device's starting point from the cloud is the right first
+        move on a fresh sign-in; pullCloudSnapshot() itself already
+        falls through to a push whenever that's actually correct.
       */
-      requestCloudSync()
+      requestCloudPullIfSignedIn(true)
 
     }
 

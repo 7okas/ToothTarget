@@ -1,22 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /*
-  PHASE 8 - FINAL HARDENING / INTEGRATION SUITE
+  INTEGRATION SUITE (originally Phase 8 of the old roadmap; its
+  two-device MERGE convergence scenarios were replaced by the Sync &
+  Statistics Redesign Plan's own Phase 5 - the single-writer sync
+  model, below)
 
   Everything below exercises the REAL orchestration
-  (mergeCloudSyncDocuments, syncCloudNow, requestCloudSync) against a
-  FAKE Graph transport (FakeCloudFile) that faithfully reproduces the
-  real conditional-write semantics Phase 5 verified against current
-  Graph documentation (create-only-if-absent, If-Match on update,
-  412 on mismatch) - only fetch()/getAccessToken() themselves are
-  mocked (via mocking cloudStorage.ts's two exported functions),
-  never the merge/orchestration/scheduler logic under test.
+  (pushLocalSnapshot/pullCloudSnapshot/syncCloudNow/requestCloudSync)
+  against a FAKE Graph transport (FakeCloudFile) that faithfully
+  reproduces the real conditional-write semantics this app relies on
+  (create-only-if-absent, If-Match on update, 412 on mismatch) - only
+  fetch()/getAccessToken() themselves are mocked (via mocking
+  cloudStorage.ts's two exported functions), never the sync/
+  orchestration/scheduler logic under test.
 
   Two independent "devices" are simulated by swapping which in-memory
-  Storage instance is currently assigned to globalThis.localStorage
-  and having both devices' syncCloudNow() calls read/write the SAME
-  FakeCloudFile instance - this is what makes these genuine two-device
-  convergence tests rather than a single device talking to itself.
+  Storage instance is currently assigned to globalThis.localStorage,
+  with both devices' pushLocalSnapshot()/pullCloudSnapshot() calls
+  reading/writing the SAME FakeCloudFile instance - this is what makes
+  these genuine two-device propagation tests rather than a single
+  device talking to itself. Per this phase's own design, there is no
+  blind per-record merge any more (cloudMerge.ts is untouched and still
+  has its own full coverage in cloudMerge.test.ts) - two devices with
+  independent, unreconciled changes now diverge rather than silently
+  combining; see the "single-writer propagation" tests below for
+  exactly that distinction.
 */
 
 vi.mock('./cloudStorage', () => ({
@@ -38,8 +47,6 @@ import {
   type CloudSyncDocument,
 } from './cloudSync'
 
-import { mergeCloudSyncDocuments } from './cloudMerge'
-
 import {
   readCloudSyncDocument,
   writeCloudSyncDocument,
@@ -47,17 +54,17 @@ import {
   type CloudSyncWriteResult,
 } from './cloudStorage'
 
-import { syncCloudNow } from './cloudSyncEngine'
+import {
+  syncCloudNow,
+  pushLocalSnapshot,
+  pullCloudSnapshot,
+  markLocalDataDirty,
+} from './cloudSyncEngine'
 
 import {
   requestCloudSync,
   __resetCloudSyncSchedulerForTests,
 } from './cloudSyncScheduler'
-
-import {
-  readPersistedPatientNumberConflicts,
-  resolvePatientNumberConflictUnderLock,
-} from './patientNumberConflicts'
 
 const mockedRead = vi.mocked(readCloudSyncDocument)
 const mockedWrite = vi.mocked(writeCloudSyncDocument)
@@ -295,17 +302,6 @@ function makeBuiltinTemplate(
   }
 }
 
-function makeProcedure(overrides: Partial<Procedure> = {}): Procedure {
-  return {
-    id: 'procedure-1',
-    name: 'Custom Procedure',
-    isCustom: true,
-    templateId: 'template-1',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...overrides,
-  }
-}
-
 /*
   deletedAt defaults to "right now" (Phase 4.7), not a fixed literal
   date - these tests' own narratives always mean "a tombstone that was
@@ -356,12 +352,24 @@ afterEach(() => {
 })
 
 /* ============================================================
-   2. TWO-DEVICE CONVERGENCE - INDEPENDENT PATIENT CREATION
-   ============================================================ */
+   2. SINGLE-WRITER PUSH/PULL ACROSS TWO DEVICES (Phase 5)
+   ============================================================
 
-describe('two-device convergence - independent patient creation', () => {
+   Replaces the old per-record-merge convergence/resurrection-
+   prevention/concurrent-editing scenarios this section used to carry
+   (patient-number collision, tombstone-based deletion suppression,
+   latest-updatedAt-wins tie-breaks) - all of that machinery is still
+   fully intact and still fully tested on its own terms
+   (cloudMerge.test.ts/staleRecordReview.test.ts), it is just no longer
+   reachable through the live sync path, so testing it THROUGH
+   syncCloudNow() here no longer means anything. What replaces it is
+   this phase's own model: push the whole local snapshot, pull the
+   whole cloud snapshot, diverge (never guess) when both sides moved.
+*/
 
-  it('both UUIDs survive on the cloud and on both devices after both sync', async () => {
+describe('single-writer propagation across two devices', () => {
+
+  it("device A pushes to an empty cloud; device B pulls and adopts A's data cleanly", async () => {
 
     const cloud = new FakeCloudFile()
     wireTransportTo(cloud)
@@ -370,837 +378,143 @@ describe('two-device convergence - independent patient creation', () => {
     const deviceB = new MemoryStorage()
 
     useDevice(deviceA)
-    seedSynchronized({ patients: [makePatient({ id: 'a', patientNumber: 1 })] })
-    const resultA = await syncCloudNow()
-    expect(resultA.status).toBe('synced')
+    seedSynchronized({ patients: [makePatient({ id: 'a' })] })
+    markLocalDataDirty()
+
+    const pushResult = await pushLocalSnapshot()
+    expect(pushResult.status).toBe('synced')
+    expect(cloud.peek()?.patients.map(p => p.id)).toEqual(['a'])
 
     useDevice(deviceB)
-    seedSynchronized({ patients: [makePatient({ id: 'b', patientNumber: 2 })] })
-    const resultB = await syncCloudNow()
-    expect(resultB.status).toBe('synced')
+    seedSynchronized({}) // a fresh device, nothing of its own to protect
 
-    // Device B's own sync already merged in whatever the cloud had (A).
-    expect(
-      readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
-    ).toEqual(['a', 'b'])
-
-    expect(
-      cloud.peek()?.patients.map(p => p.id).sort()
-    ).toEqual(['a', 'b'])
-
-    // Device A syncs again and picks up B.
-    useDevice(deviceA)
-    const resultA2 = await syncCloudNow()
-    expect(resultA2.status).toBe('synced')
-    expect(
-      readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
-    ).toEqual(['a', 'b'])
+    const pullResult = await pullCloudSnapshot()
+    expect(pullResult.status).toBe('synced')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['a'])
 
   })
 
-})
-
-/* ============================================================
-   3. SAME PATIENT ON TWO DEVICES
-   ============================================================ */
-
-describe('same patient UUID on two devices', () => {
-
-  it('identical content on both sides deduplicates to one patient, id/number unchanged', async () => {
+  it("device B edits offline, then pushes - succeeds because the cloud hasn't moved since B's own pull", async () => {
 
     const cloud = new FakeCloudFile()
     wireTransportTo(cloud)
 
-    const patient = makePatient({ id: 'shared', patientNumber: 7 })
-
     const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ patients: [patient] })
-    await syncCloudNow()
-
     const deviceB = new MemoryStorage()
+
+    useDevice(deviceA)
+    seedSynchronized({ patients: [makePatient({ id: 'a' })] })
+    markLocalDataDirty()
+    await pushLocalSnapshot()
+
     useDevice(deviceB)
-    seedSynchronized({ patients: [{ ...patient }] })
-    const result = await syncCloudNow()
+    seedSynchronized({})
+    await pullCloudSnapshot()
+
+    // Device B's own offline edit.
+    seed('toothTargetPatients', [
+      makePatient({ id: 'a' }),
+      makePatient({ id: 'b', patientNumber: 2 }),
+    ])
+    markLocalDataDirty()
+
+    const result = await pushLocalSnapshot()
 
     expect(result.status).toBe('synced')
-    expect(readKey<Patient[]>('toothTargetPatients')).toEqual([patient])
-    expect(cloud.peek()?.patients).toEqual([patient])
+    expect(cloud.peek()?.patients.map(p => p.id).sort()).toEqual(['a', 'b'])
 
   })
 
-  it('same UUID with different content (should-never-happen) uses the Phase 3 deterministic tie-break, not a new rule', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const patientVariantA = makePatient({ id: 'shared', name: 'Ahmed Ali' })
-    const patientVariantB = makePatient({ id: 'shared', name: 'Mohamed Hassan' })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ patients: [patientVariantA] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ patients: [patientVariantB] })
-    await syncCloudNow()
-
-    // Whatever cloudMerge.ts's resolveTie() picks, it must be exactly
-    // one of the two input variants (never a fabricated third value),
-    // and it must match what the pure merge engine itself would pick.
-    const directMerge = mergeCloudSyncDocuments(
-      makeCloudDocument({ patients: [patientVariantA] }),
-      makeCloudDocument({ patients: [patientVariantB] })
-    )
-
-    expect(cloud.peek()?.patients).toEqual(directMerge.document.patients)
-    expect([patientVariantA, patientVariantB]).toContainEqual(
-      cloud.peek()!.patients[0]
-    )
-
-  })
-
-})
-
-/* ============================================================
-   4. PATIENT-NUMBER COLLISION ACROSS DEVICES + RESOLUTION
-   ============================================================ */
-
-describe('patient-number collision across devices', () => {
-
-  it('both patients/UUIDs survive, conflict is detected/persisted, sync still succeeds, no renumbering', async () => {
+  it('two devices edit independently without reconciling: the SECOND push diverges rather than overwriting the first', async () => {
 
     const cloud = new FakeCloudFile()
     wireTransportTo(cloud)
 
     const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ patients: [makePatient({ id: 'a', patientNumber: 42 })] })
-    await syncCloudNow()
-
     const deviceB = new MemoryStorage()
+
+    // Both devices start from the same baseline.
+    useDevice(deviceA)
+    seedSynchronized({ patients: [makePatient({ id: 'shared' })] })
+    markLocalDataDirty()
+    await pushLocalSnapshot()
+
     useDevice(deviceB)
-    seedSynchronized({ patients: [makePatient({ id: 'b', patientNumber: 42 })] })
-    const result = await syncCloudNow()
+    seedSynchronized({})
+    await pullCloudSnapshot()
 
-    expect(result.status).toBe('synced-with-conflicts')
-
-    if (result.status !== 'synced-with-conflicts') {
-      throw new Error('expected synced-with-conflicts')
-    }
-
-    expect(result.patientNumberConflicts).toEqual([
-      { patientNumber: 42, patientIds: ['a', 'b'] },
+    // Device A edits and pushes again - the cloud moves forward.
+    useDevice(deviceA)
+    seed('toothTargetPatients', [
+      makePatient({ id: 'shared', name: 'Edited By A' }),
     ])
-
-    const patientsOnB = readKey<Patient[]>('toothTargetPatients')
-    expect(patientsOnB.map(p => p.id).sort()).toEqual(['a', 'b'])
-    expect(patientsOnB.every(p => p.patientNumber === 42)).toBe(true)
-
-    expect(readPersistedPatientNumberConflicts()).toEqual([
-      { patientNumber: 42, patientIds: ['a', 'b'] },
-    ])
-
-  })
-
-  it('explicit resolution keeps the chosen number, renumbers the other, preserves treatments/UUIDs, and the correction reaches the cloud', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ patients: [makePatient({ id: 'a', patientNumber: 42 })] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-
-    const treatmentForA = makeSavedTreatment({ id: 't-a', patientId: 'a' })
-
-    seedSynchronized({
-      patients: [makePatient({ id: 'b', patientNumber: 42 })],
-      savedTreatments: [treatmentForA],
-    })
-    seed('toothTargetNextPatientNumber', 43)
-
-    await syncCloudNow() // produces the conflict on device B, as above
-
-    // Explicit dentist resolution: keep 'a' at #42.
-    const resolution = resolvePatientNumberConflictUnderLock(42, 'a')
-
-    expect(resolution.resolved).toBe(true)
-
-    if (!resolution.resolved) {
-      throw new Error('expected resolution to succeed')
-    }
-
-    const keptPatient = resolution.patients.find(p => p.id === 'a')
-    const renumberedPatient = resolution.patients.find(p => p.id === 'b')
-
-    expect(keptPatient?.patientNumber).toBe(42)
-    expect(renumberedPatient?.patientNumber).not.toBe(42)
-    expect(renumberedPatient?.id).toBe('b') // UUID untouched
-    expect(renumberedPatient?.patientNumber).toBeGreaterThanOrEqual(43) // existing allocation formula
-
-    // Existing treatments untouched by the renumbering.
-    expect(readKey<SavedTreatment[]>('toothTargetSavedTreatments')).toEqual([
-      treatmentForA,
-    ])
-
-    // Phase 8 follow-up: the corrected registry must reach the cloud -
-    // this is the App.tsx confirmConflictResolution() -> requestCloudSync()
-    // wiring added in this phase. Simulate that wiring directly here
-    // (App.tsx itself cannot be imported into Vitest - see this
-    // project's established MSAL/window constraint) by requesting a
-    // sync exactly the way that handler now does, gated on resolved.
-    if (resolution.resolved) {
-      requestCloudSync()
-    }
-
-    await flushMicrotasks(20)
-
-    expect(cloud.peek()?.patients.find(p => p.id === 'b')?.patientNumber)
-      .toBe(renumberedPatient?.patientNumber)
-
-  })
-
-  it('does not sync when conflict resolution is a no-op', async () => {
-
-    seedSynchronized({ patients: [makePatient({ id: 'a', patientNumber: 1 })] })
-
-    const resolution = resolvePatientNumberConflictUnderLock(1, 'a')
-
-    // Nobody else holds #1 - this is already resolved / a no-op.
-    expect(resolution.resolved).toBe(false)
-
-    if (resolution.resolved) {
-      requestCloudSync()
-    }
-
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(mockedRead).not.toHaveBeenCalled()
-    expect(mockedWrite).not.toHaveBeenCalled()
-
-  })
-
-})
-
-/* ============================================================
-   5. PATIENT DELETION / OFFLINE RESURRECTION PREVENTION
-   ============================================================ */
-
-describe('patient deletion and offline resurrection prevention', () => {
-
-  it('a patient deleted on one device while another is offline never returns, and their treatments are suppressed', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const patientX = makePatient({ id: 'x' })
-    const treatmentForX = makeSavedTreatment({ id: 't-x', patientId: 'x' })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({
-      patients: [patientX],
-      savedTreatments: [treatmentForX],
-    })
-    await syncCloudNow() // cloud now has patient X + their treatment
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({
-      patients: [patientX],
-      savedTreatments: [treatmentForX],
-    })
-    // Device B is offline at this point - it never syncs yet, it just
-    // has its own local copy of X (this is the "still has the old
-    // patient locally" state from the task).
-
-    // Device A deletes X (a tombstone appears, exactly like
-    // App.tsx's removePatientFromCurrentList()/appendTombstone()) and
-    // syncs.
-    useDevice(deviceA)
-    seedSynchronized({
-      patients: [],
-      savedTreatments: [],
-      tombstones: [makeTombstone({ entityType: 'patient', entityId: 'x' })],
-    })
-    const resultA = await syncCloudNow()
+    markLocalDataDirty()
+    const resultA = await pushLocalSnapshot()
     expect(resultA.status).toBe('synced')
-    expect(cloud.peek()?.patients).toEqual([])
-    expect(cloud.peek()?.deletionTombstones).toHaveLength(1)
 
-    // Device B comes back online and syncs - it still locally has X.
+    // Device B, unaware of A's edit, makes its OWN edit and tries to push.
     useDevice(deviceB)
-    const resultB = await syncCloudNow()
+    seed('toothTargetPatients', [
+      makePatient({ id: 'shared' }),
+      makePatient({ id: 'b-only', patientNumber: 2 }),
+    ])
+    markLocalDataDirty()
 
-    expect(resultB.status).toBe('synced')
-    expect(readKey<Patient[]>('toothTargetPatients')).toEqual([])
-    expect(
-      readKey<SavedTreatment[]>('toothTargetSavedTreatments')
-    ).toEqual([])
-    expect(
-      readKey<DeletionTombstone[]>('toothTargetDeletionTombstones')
-    ).toHaveLength(1)
+    const resultB = await pushLocalSnapshot()
 
-    // Device A syncing again never sees X return either.
-    useDevice(deviceA)
-    await syncCloudNow()
-    expect(readKey<Patient[]>('toothTargetPatients')).toEqual([])
+    expect(resultB.status).toBe('diverged')
+
+    // Neither side was overwritten - the cloud still has A's edit...
+    expect(cloud.peek()?.patients.map(p => p.name)).toEqual(['Edited By A'])
+    // ...and B's own local data is completely untouched too.
+    expect(
+      readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
+    ).toEqual(['b-only', 'shared'])
 
   })
 
-  it('does not touch active/incomplete treatments as part of synchronization', async () => {
+  it('deleting a patient is a plain local removal, pushed in the next snapshot - no tombstone needed for the deletion to reach another device', async () => {
 
     const cloud = new FakeCloudFile()
     wireTransportTo(cloud)
-
-    const device = new MemoryStorage()
-    useDevice(device)
-
-    seedSynchronized({
-      patients: [],
-      tombstones: [makeTombstone({ entityType: 'patient', entityId: 'x' })],
-    })
-
-    const activeMarker = { id: 'active-marker' }
-    const incompleteMarker = [{ id: 'incomplete-marker' }]
-
-    seed('toothTargetActiveTreatment', activeMarker)
-    seed('toothTargetIncompleteTreatments', incompleteMarker)
-
-    await syncCloudNow()
-
-    expect(readKey('toothTargetActiveTreatment')).toEqual(activeMarker)
-    expect(readKey('toothTargetIncompleteTreatments')).toEqual(
-      incompleteMarker
-    )
-
-  })
-
-})
-
-/* ============================================================
-   6. TEMPLATE DELETION / OFFLINE RESURRECTION PREVENTION
-   ============================================================ */
-
-describe('template deletion and offline resurrection prevention', () => {
-
-  it('a template tombstoned on one device never returns, and its procedure is not auto-deleted', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const template = makeTemplate({ id: 'tmpl-a' })
-    const procedure = makeProcedure({ id: 'proc-a', templateId: 'tmpl-a' })
 
     const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({
-      templates: [makeBuiltinTemplate(), template],
-      procedures: [procedure],
-    })
-    await syncCloudNow()
-
     const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({
-      templates: [makeBuiltinTemplate(), template],
-      procedures: [procedure],
-    })
-    // Offline - has not synced yet.
 
     useDevice(deviceA)
     seedSynchronized({
-      templates: [makeBuiltinTemplate()],
-      procedures: [procedure],
-      tombstones: [
-        makeTombstone({ entityType: 'procedureTemplate', entityId: 'tmpl-a' }),
+      patients: [
+        makePatient({ id: 'keep' }),
+        makePatient({ id: 'delete-me', patientNumber: 2 }),
       ],
     })
-    await syncCloudNow()
+    markLocalDataDirty()
+    await pushLocalSnapshot()
 
     useDevice(deviceB)
-    const resultB = await syncCloudNow()
-
-    expect(resultB.status).toBe('synced')
-
-    const committedTemplates =
-      readKey<ProcedureTemplate[]>('toothTargetTemplates')
-
-    expect(committedTemplates.filter(t => t.isCustom)).toEqual([])
-    expect(committedTemplates.find(t => t.id === 'general')).toBeTruthy()
-
-    // The procedure referencing the now-tombstoned template survives
-    // untouched - matching the existing Phase 3 rule.
+    seedSynchronized({})
+    await pullCloudSnapshot()
     expect(
-      readKey<Procedure[]>('toothTargetProcedures').find(
-        p => p.id === 'proc-a'
-      )
-    ).toEqual(procedure)
+      readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
+    ).toEqual(['delete-me', 'keep'])
 
-  })
+    // Device B deletes the patient - a plain local removal, deliberately
+    // writing NO tombstone here (unlike App.tsx's own still-unchanged
+    // delete flow, which does write one - this test only exercises the
+    // push/pull layer itself, which never reads tombstones any more).
+    seed('toothTargetPatients', [makePatient({ id: 'keep' })])
+    markLocalDataDirty()
 
-})
+    const pushResult = await pushLocalSnapshot()
+    expect(pushResult.status).toBe('synced')
+    expect(cloud.peek()?.patients.map(p => p.id)).toEqual(['keep'])
 
-/* ============================================================
-   7. CUSTOM TEMPLATE CONCURRENT EDITING
-   ============================================================ */
-
-describe('custom template concurrent editing - latest-updatedAt-wins', () => {
-
-  it('B wins when A is older than B', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const older = makeTemplate({
-      id: 'tmpl-a',
-      name: 'Version A',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    })
-    const newer = makeTemplate({
-      id: 'tmpl-a',
-      name: 'Version B',
-      updatedAt: '2026-06-01T00:00:00.000Z',
-    })
-
-    const deviceA = new MemoryStorage()
+    // Device A - which never touched this patient itself - pulls cleanly
+    // and the deletion reaches it too.
     useDevice(deviceA)
-    seedSynchronized({ templates: [makeBuiltinTemplate(), older] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ templates: [makeBuiltinTemplate(), newer] })
-    await syncCloudNow()
-
-    expect(
-      readKey<ProcedureTemplate[]>('toothTargetTemplates').find(
-        t => t.isCustom
-      )
-    ).toEqual(newer)
-
-  })
-
-  it('the older version never overwrites newer content, regardless of sync order', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const older = makeTemplate({
-      id: 'tmpl-a',
-      name: 'Version A',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    })
-    const newer = makeTemplate({
-      id: 'tmpl-a',
-      name: 'Version B',
-      updatedAt: '2026-06-01T00:00:00.000Z',
-    })
-
-    // Reversed order from the previous test - newer syncs first.
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ templates: [makeBuiltinTemplate(), newer] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ templates: [makeBuiltinTemplate(), older] })
-    await syncCloudNow()
-
-    expect(
-      readKey<ProcedureTemplate[]>('toothTargetTemplates').find(
-        t => t.isCustom
-      )
-    ).toEqual(newer)
-
-  })
-
-  it('equal updatedAt with different content resolves via the deterministic canonical tie-break', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const variantA = makeTemplate({
-      id: 'tmpl-a',
-      name: 'Content A',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    })
-    const variantB = makeTemplate({
-      id: 'tmpl-a',
-      name: 'Content B',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ templates: [makeBuiltinTemplate(), variantA] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ templates: [makeBuiltinTemplate(), variantB] })
-    await syncCloudNow()
-
-    const directMerge = mergeCloudSyncDocuments(
-      makeCloudDocument({ customTemplates: [variantA] }),
-      makeCloudDocument({ customTemplates: [variantB] })
-    )
-
-    expect(
-      readKey<ProcedureTemplate[]>('toothTargetTemplates').find(
-        t => t.isCustom
-      )
-    ).toEqual(directMerge.document.customTemplates[0])
-
-  })
-
-})
-
-/* ============================================================
-   8. SAVED TREATMENT CONVERGENCE
-   ============================================================ */
-
-describe('saved treatment convergence', () => {
-
-  it('different treatment IDs from both devices both survive', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const treatmentA = makeSavedTreatment({ id: 't-a', patientId: 'p1' })
-    const treatmentB = makeSavedTreatment({ id: 't-b', patientId: 'p2' })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ savedTreatments: [treatmentA] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ savedTreatments: [treatmentB] })
-    await syncCloudNow()
-
-    expect(
-      readKey<SavedTreatment[]>('toothTargetSavedTreatments')
-        .map(t => t.id)
-        .sort()
-    ).toEqual(['t-a', 't-b'])
-
-  })
-
-  it('the same treatment ID with identical content deduplicates to one record, IDs preserved exactly', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const treatment = makeSavedTreatment({ id: 't-shared' })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ savedTreatments: [treatment] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ savedTreatments: [{ ...treatment }] })
-    await syncCloudNow()
-
-    const committed = readKey<SavedTreatment[]>('toothTargetSavedTreatments')
-
-    expect(committed).toHaveLength(1)
-    expect(committed[0]).toEqual(treatment)
-    expect(committed[0].id).toBe('t-shared')
-    expect(committed[0].phaseRecords[0].id).toBe('phase-1')
-    expect(committed[0].events[0].id).toBe('event-1')
-
-  })
-
-  it('the same treatment ID with different content uses the deterministic tie-break, never a new merge rule', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const variantA = makeSavedTreatment({ id: 't-shared', totalActualDuration: 500 })
-    const variantB = makeSavedTreatment({ id: 't-shared', totalActualDuration: 600 })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ savedTreatments: [variantA] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ savedTreatments: [variantB] })
-    await syncCloudNow()
-
-    const directMerge = mergeCloudSyncDocuments(
-      makeCloudDocument({ savedTreatments: [variantA] }),
-      makeCloudDocument({ savedTreatments: [variantB] })
-    )
-
-    expect(
-      readKey<SavedTreatment[]>('toothTargetSavedTreatments')
-    ).toEqual(directMerge.document.savedTreatments)
-
-  })
-
-})
-
-/* ============================================================
-   9. PROCEDURE CONVERGENCE
-   ============================================================ */
-
-describe('custom procedure convergence', () => {
-
-  it('procedures created on different devices both survive', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ procedures: [makeProcedure({ id: 'proc-a' })] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ procedures: [makeProcedure({ id: 'proc-b' })] })
-    await syncCloudNow()
-
-    expect(
-      readKey<Procedure[]>('toothTargetProcedures')
-        .filter(p => p.isCustom)
-        .map(p => p.id)
-        .sort()
-    ).toEqual(['proc-a', 'proc-b'])
-
-  })
-
-  it('the same procedure ID with different content uses the deterministic tie-break, and template references are exactly as the merge produced', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const variantA = makeProcedure({ id: 'proc-shared', templateId: 'tmpl-a' })
-    const variantB = makeProcedure({ id: 'proc-shared', templateId: 'tmpl-b' })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ procedures: [variantA] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ procedures: [variantB] })
-    await syncCloudNow()
-
-    const directMerge = mergeCloudSyncDocuments(
-      makeCloudDocument({ customProcedures: [variantA] }),
-      makeCloudDocument({ customProcedures: [variantB] })
-    )
-
-    expect(
-      readKey<Procedure[]>('toothTargetProcedures').filter(p => p.isCustom)
-    ).toEqual(directMerge.document.customProcedures)
-
-  })
-
-})
-
-/* ============================================================
-   9b. CUSTOM PROCEDURE CONCURRENT EDITING (Phase 5.5)
-   ============================================================ */
-
-describe('custom procedure concurrent editing - latest-updatedAt-wins', () => {
-
-  it('B wins when A is older than B', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const older = makeProcedure({
-      id: 'proc-a',
-      name: 'Name A',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    })
-    const newer = makeProcedure({
-      id: 'proc-a',
-      name: 'Name B',
-      updatedAt: '2026-06-01T00:00:00.000Z',
-    })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ procedures: [older] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ procedures: [newer] })
-    await syncCloudNow()
-
-    expect(
-      readKey<Procedure[]>('toothTargetProcedures').find(p => p.isCustom)
-    ).toEqual(newer)
-
-  })
-
-  it('the older version never overwrites newer content, regardless of sync order', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const older = makeProcedure({
-      id: 'proc-a',
-      name: 'Name A',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    })
-    const newer = makeProcedure({
-      id: 'proc-a',
-      name: 'Name B',
-      updatedAt: '2026-06-01T00:00:00.000Z',
-    })
-
-    // Reversed order from the previous test - newer syncs first.
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({ procedures: [newer] })
-    await syncCloudNow()
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({ procedures: [older] })
-    await syncCloudNow()
-
-    expect(
-      readKey<Procedure[]>('toothTargetProcedures').find(p => p.isCustom)
-    ).toEqual(newer)
-
-  })
-
-})
-
-/* ============================================================
-   9c. PROCEDURE DELETION AND OFFLINE RESURRECTION PREVENTION
-   (Phase 5.5)
-   ============================================================ */
-
-describe('procedure deletion and offline resurrection prevention', () => {
-
-  it('a procedure tombstoned on one device never returns, and a past treatment that used it is completely unaffected', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const procedure = makeProcedure({ id: 'proc-a' })
-
-    const patient = makePatient({ id: 'patient-x' })
-
-    const pastTreatment = makeSavedTreatment({
-      id: 'treatment-1',
-      patientId: 'patient-x',
-      procedureId: 'proc-a',
-      procedureName: procedure.name,
-    })
-
-    const deviceA = new MemoryStorage()
-    useDevice(deviceA)
-    seedSynchronized({
-      procedures: [procedure],
-      patients: [patient],
-      savedTreatments: [pastTreatment],
-    })
-    await syncCloudNow() // cloud now has the procedure, the patient, and the treatment
-
-    const deviceB = new MemoryStorage()
-    useDevice(deviceB)
-    seedSynchronized({
-      procedures: [procedure],
-      patients: [patient],
-      savedTreatments: [pastTreatment],
-    })
-    // Device B is offline at this point - it never syncs yet, it just
-    // has its own local copy (this is the "still has the old
-    // procedure locally" state).
-
-    // Device A deletes the procedure (a tombstone appears, exactly
-    // like App.tsx's deleteProcedureFromRegistry()) and syncs. The
-    // treatment is NOT touched.
-    useDevice(deviceA)
-    seedSynchronized({
-      procedures: [],
-      patients: [patient],
-      savedTreatments: [pastTreatment],
-      tombstones: [
-        makeTombstone({ entityType: 'procedure', entityId: 'proc-a' }),
-      ],
-    })
-    const resultA = await syncCloudNow()
-    expect(resultA.status).toBe('synced')
-    expect(cloud.peek()?.customProcedures).toEqual([])
-    expect(cloud.peek()?.savedTreatments).toEqual([pastTreatment])
-
-    // Device B comes back online and syncs - it still locally has the
-    // procedure.
-    useDevice(deviceB)
-    const resultB = await syncCloudNow()
-    expect(resultB.status).toBe('synced')
-
-    // The procedure never resurrects on device B...
-    expect(
-      readKey<Procedure[]>('toothTargetProcedures').filter(p => p.isCustom)
-    ).toEqual([])
-
-    // ...but device B's own copy of the past treatment is completely
-    // unaffected - same content, still there, still fully displayable.
-    expect(
-      readKey<SavedTreatment[]>('toothTargetSavedTreatments')
-    ).toEqual([pastTreatment])
-
-  })
-
-  it('deleting a procedure only removes it from the customProcedures list - it never touches savedTreatments, even when many treatments reference it', async () => {
-
-    const cloud = new FakeCloudFile()
-    wireTransportTo(cloud)
-
-    const procedure = makeProcedure({ id: 'proc-popular' })
-
-    const treatments = [
-      makeSavedTreatment({ id: 't1', procedureId: 'proc-popular' }),
-      makeSavedTreatment({ id: 't2', procedureId: 'proc-popular' }),
-      makeSavedTreatment({ id: 't3', procedureId: 'proc-popular' }),
-    ]
-
-    const device = new MemoryStorage()
-    useDevice(device)
-    seedSynchronized({
-      procedures: [procedure],
-      savedTreatments: treatments,
-    })
-    await syncCloudNow()
-
-    seedSynchronized({
-      procedures: [],
-      savedTreatments: treatments,
-      tombstones: [
-        makeTombstone({ entityType: 'procedure', entityId: 'proc-popular' }),
-      ],
-    })
-    const result = await syncCloudNow()
-
-    expect(result.status).toBe('synced')
-    expect(readKey<Procedure[]>('toothTargetProcedures').filter(p => p.isCustom)).toEqual([])
-    expect(readKey<SavedTreatment[]>('toothTargetSavedTreatments')).toEqual(treatments)
+    const pullResult = await pullCloudSnapshot()
+    expect(pullResult.status).toBe('synced')
+    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual(['keep'])
 
   })
 
@@ -1399,20 +713,29 @@ describe('sync while the user keeps working', () => {
 
 describe('multiple tabs sharing one cloud file', () => {
 
-  it("two tabs' independent syncs both converge through Phase 6's ETag/merge handling", async () => {
+  it('two tabs racing a first-ever push resolve to exactly one synced winner and one diverged loser - never a silent merge', async () => {
 
     /*
       A real second browser tab is a SEPARATE JS runtime with its own
       module instances - crucially, its own cloudSyncEngine.ts
       `inFlightSync` closure variable - that only shares localStorage
       and the cloud file with the first tab. Calling the single
-      already-imported syncCloudNow() twice in a row would instead hit
-      THIS module instance's own same-tab in-flight guard (Phase 6),
-      which is not what two real tabs would do. vi.resetModules() +
-      a fresh dynamic import gives each simulated "tab" its own
-      cloudSyncEngine module instance, while both still resolve to the
-      same top-of-file vi.mock('./cloudStorage', ...) and the same
-      shared localStorage/FakeCloudFile below.
+      already-imported pushLocalSnapshot() twice in a row would instead
+      hit THIS module instance's own same-tab in-flight guard, which is
+      not what two real tabs would do. vi.resetModules() + a fresh
+      dynamic import gives each simulated "tab" its own cloudSyncEngine
+      module instance, while both still resolve to the same top-of-file
+      vi.mock('./cloudStorage', ...) and the same shared localStorage/
+      FakeCloudFile below.
+
+      Phase 5 (single-writer sync model) - under the OLD per-record
+      merge, two tabs racing like this converged (both patients
+      survived via mergeCloudSyncDocuments()). There is no merge any
+      more: exactly one tab's push can ever win a genuine first-write
+      race, and the other gets 'diverged' (its own retry re-reads the
+      winner's now-different content and correctly refuses to guess
+      which side should win) - never silent data loss, never a silent
+      combination of both.
     */
 
     const cloud = new FakeCloudFile()
@@ -1429,34 +752,47 @@ describe('multiple tabs sharing one cloud file', () => {
     vi.resetModules()
     const tabBEngine = await import('./cloudSyncEngine')
 
-    // Tab A's patient is committed locally, then its sync begins -
-    // this synchronously reads local storage up to its first await,
-    // so it captures only its own patient.
+    // Tab A's patient is committed locally, then its push begins - this
+    // synchronously reads local storage up to its first await, so it
+    // captures only its own patient.
     seed('toothTargetPatients', [
       makePatient({ id: 'tab-a-patient', patientNumber: 1 }),
     ])
 
-    const tabASync = tabAEngine.syncCloudNow()
+    const tabAPush = tabAEngine.pushLocalSnapshot()
 
     // Tab B's own change lands in the shared storage next, and its
-    // sync begins - it reads the CURRENT shared storage (both
+    // push begins - it reads the CURRENT shared storage (both
     // patients), exactly like a second real tab would.
     seed('toothTargetPatients', [
       makePatient({ id: 'tab-a-patient', patientNumber: 1 }),
       makePatient({ id: 'tab-b-patient', patientNumber: 2 }),
     ])
 
-    const tabBSync = tabBEngine.syncCloudNow()
+    const tabBPush = tabBEngine.pushLocalSnapshot()
 
-    const [resultA, resultB] = await Promise.all([tabASync, tabBSync])
+    const [resultA, resultB] = await Promise.all([tabAPush, tabBPush])
 
-    expect(['synced', 'contention']).toContain(resultA.status)
-    expect(['synced', 'contention']).toContain(resultB.status)
+    // Exactly one wins, exactly one diverges - never both 'synced'
+    // (that would mean a silent merge happened), never both 'diverged'
+    // (a first-ever write against an empty cloud can always succeed
+    // for SOMEONE).
+    expect([resultA.status, resultB.status].sort()).toEqual([
+      'diverged',
+      'synced',
+    ])
 
-    // Regardless of exactly how the race between the two calls
-    // resolved, nothing was lost or duplicated in the end.
+    // The cloud holds exactly ONE tab's own patient set, verbatim -
+    // either A's alone, or B's (which already included A's, since B
+    // read local storage after A's own patient landed) - never
+    // anything else, and in particular never a merged/deduplicated
+    // combination neither tab ever actually pushed.
     const finalCloudPatients = cloud.peek()?.patients.map(p => p.id).sort()
-    expect(finalCloudPatients).toEqual(['tab-a-patient', 'tab-b-patient'])
+    const validOutcomes = [
+      ['tab-a-patient'],
+      ['tab-a-patient', 'tab-b-patient'],
+    ]
+    expect(validOutcomes).toContainEqual(finalCloudPatients)
 
   })
 
@@ -1548,242 +884,6 @@ describe('cloud corruption never overwrites or fabricates data', () => {
     if (result.status === 'cloud-invalid') {
       expect(result.detail).toContain('schema version')
     }
-
-  })
-
-})
-
-/* ============================================================
-   17. CONDITIONAL-WRITE RACE / CONTENTION
-   ============================================================ */
-
-describe('conditional-write race', () => {
-
-  it('a 412 from another writer triggers exactly one re-read/merge/retry that includes both sides', async () => {
-
-    const cloud = new FakeCloudFile()
-
-    const device = new MemoryStorage()
-    useDevice(device)
-    seedSynchronized({ patients: [makePatient({ id: 'a' })] })
-
-    // Prime the cloud as if it already had A (v1 -> etag "v1").
-    cloud.write(makeCloudDocument({ patients: [makePatient({ id: 'a' })] }), null)
-
-    mockedRead.mockImplementationOnce(async () => cloud.read()) // returns etag "v1"
-
-    // Between our read and our write, "another writer" changes the
-    // cloud (etag becomes "v2") - our first write attempt (still
-    // holding "v1") must fail with 412.
-    mockedWrite.mockImplementationOnce(async () => {
-
-      const currentCloudState = cloud.read()
-
-      cloud.write(
-        makeCloudDocument({
-          patients: [
-            makePatient({ id: 'a' }),
-            makePatient({ id: 'other-writer', patientNumber: 2 }),
-          ],
-        }),
-        currentCloudState.status === 'found' ? currentCloudState.eTag : null
-      )
-      return { status: 'precondition-failed' }
-    })
-
-    // The retry's own read/write go through the fake normally.
-    mockedRead.mockImplementation(async () => cloud.read())
-    mockedWrite.mockImplementation(async (document, expectedETag) =>
-      cloud.write(document, expectedETag)
-    )
-
-    const result = await syncCloudNow()
-
-    expect(result.status).toBe('synced')
-    expect(cloud.peek()?.patients.map(p => p.id).sort()).toEqual([
-      'a',
-      'other-writer',
-    ])
-
-  })
-
-  it('three consecutive 412s return contention with exactly 3 attempts, and local state is untouched', async () => {
-
-    const device = new MemoryStorage()
-    useDevice(device)
-    seedSynchronized({ patients: [makePatient({ id: 'a' })] })
-
-    mockedRead.mockResolvedValue({
-      status: 'found',
-      document: makeCloudDocument(),
-      eTag: '"stale"',
-    })
-    mockedWrite.mockResolvedValue({ status: 'precondition-failed' })
-
-    const result = await syncCloudNow()
-
-    expect(result).toEqual({ status: 'contention', attempts: 3 })
-    expect(mockedRead).toHaveBeenCalledTimes(3)
-    expect(mockedWrite).toHaveBeenCalledTimes(3)
-    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual([
-      'a',
-    ])
-
-  })
-
-})
-
-/* ============================================================
-   18 & 19. CRASH-SAFETY / PARTIAL LOCALSTORAGE COMMIT
-   ============================================================ */
-
-describe('crash-safety and partial local commit recovery', () => {
-
-  it('cloud commit succeeds, local commit is interrupted (simulated reload), next sync converges', async () => {
-
-    const cloud = new FakeCloudFile()
-
-    const device = new MemoryStorage()
-    useDevice(device)
-    seedSynchronized({ patients: [makePatient({ id: 'a' })] })
-
-    mockedRead.mockImplementationOnce(async () => cloud.read())
-    mockedWrite.mockImplementationOnce(async (document, expectedETag) =>
-      cloud.write(document, expectedETag)
-    )
-
-    const realSetItem = localStorage.setItem.bind(localStorage)
-
-    localStorage.setItem = (key: string, value: string) => {
-      if (key === 'toothTargetPatients') {
-        throw new Error('simulated crash mid-commit')
-      }
-      return realSetItem(key, value)
-    }
-
-    const firstResult = await syncCloudNow()
-
-    expect(firstResult.status).toBe('cloud-committed-locally-pending')
-    expect(cloud.peek()?.patients.map(p => p.id)).toEqual(['a'])
-
-    // "Page reload" - restore normal storage (a fresh page load would
-    // get a working localStorage again), local data is still stale
-    // (pre-merge) because the commit never finished.
-    localStorage.setItem = realSetItem
-
-    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual([
-      'a',
-    ])
-
-    // Next sync (triggered by whatever the next real mutation is)
-    // converges to the cloud's already-correct state.
-    mockedRead.mockImplementationOnce(async () => cloud.read())
-    mockedWrite.mockImplementationOnce(async (document, expectedETag) =>
-      cloud.write(document, expectedETag)
-    )
-
-    const secondResult = await syncCloudNow()
-
-    expect(secondResult.status).toBe('synced')
-    expect(readKey<Patient[]>('toothTargetPatients').map(p => p.id)).toEqual([
-      'a',
-    ])
-
-  })
-
-  it('a saved-treatments write failure after patients succeeded does not permanently lose data already in the cloud', async () => {
-
-    const cloud = new FakeCloudFile()
-
-    const device = new MemoryStorage()
-    useDevice(device)
-
-    const treatment = makeSavedTreatment({ id: 't-a' })
-
-    seedSynchronized({
-      patients: [makePatient({ id: 'a' })],
-      savedTreatments: [treatment],
-    })
-
-    mockedRead.mockImplementationOnce(async () => cloud.read())
-    mockedWrite.mockImplementationOnce(async (document, expectedETag) =>
-      cloud.write(document, expectedETag)
-    )
-
-    const realSetItem = localStorage.setItem.bind(localStorage)
-
-    localStorage.setItem = (key: string, value: string) => {
-      if (key === 'toothTargetSavedTreatments') {
-        throw new Error('simulated write failure')
-      }
-      return realSetItem(key, value)
-    }
-
-    const firstResult = await syncCloudNow()
-
-    expect(firstResult.status).toBe('cloud-committed-locally-pending')
-    // The cloud already has the treatment even though the local write
-    // that would have mirrored it failed.
-    expect(cloud.peek()?.savedTreatments).toEqual([treatment])
-
-    localStorage.setItem = realSetItem
-
-    mockedRead.mockImplementationOnce(async () => cloud.read())
-    mockedWrite.mockImplementationOnce(async (document, expectedETag) =>
-      cloud.write(document, expectedETag)
-    )
-
-    const secondResult = await syncCloudNow()
-
-    expect(secondResult.status).toBe('synced')
-    expect(readKey<SavedTreatment[]>('toothTargetSavedTreatments')).toEqual([
-      treatment,
-    ])
-
-  })
-
-  it('a tombstones write failure does not permanently lose the tombstone already in the cloud', async () => {
-
-    const cloud = new FakeCloudFile()
-
-    const device = new MemoryStorage()
-    useDevice(device)
-
-    const tombstone = makeTombstone({ entityId: 'deleted-patient' })
-
-    seedSynchronized({ tombstones: [tombstone] })
-
-    mockedRead.mockImplementationOnce(async () => cloud.read())
-    mockedWrite.mockImplementationOnce(async (document, expectedETag) =>
-      cloud.write(document, expectedETag)
-    )
-
-    const realSetItem = localStorage.setItem.bind(localStorage)
-
-    localStorage.setItem = (key: string, value: string) => {
-      if (key === 'toothTargetDeletionTombstones') {
-        throw new Error('simulated write failure')
-      }
-      return realSetItem(key, value)
-    }
-
-    const firstResult = await syncCloudNow()
-
-    expect(firstResult.status).toBe('cloud-committed-locally-pending')
-    expect(cloud.peek()?.deletionTombstones).toEqual([tombstone])
-
-    localStorage.setItem = realSetItem
-
-    mockedRead.mockImplementationOnce(async () => cloud.read())
-    mockedWrite.mockImplementationOnce(async (document, expectedETag) =>
-      cloud.write(document, expectedETag)
-    )
-
-    await syncCloudNow()
-
-    expect(
-      readKey<DeletionTombstone[]>('toothTargetDeletionTombstones')
-    ).toEqual([tombstone])
 
   })
 

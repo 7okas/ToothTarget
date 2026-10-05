@@ -39,6 +39,7 @@ export type SyncOutcomeType =
   | 'sign-in-denied'
   | 'offline'
   | 'onedrive-unavailable'
+  | 'diverged'
 
 export type SyncOutcomeReason = {
   type: SyncOutcomeType
@@ -106,6 +107,9 @@ export function classifySyncOutcome(
 
     case 'graph-error':
       return { type: 'onedrive-unavailable' }
+
+    case 'diverged':
+      return { type: 'diverged' }
 
   }
 
@@ -297,6 +301,24 @@ export const SYNC_OUTCOME_COPY: Record<SyncOutcomeType, SyncOutcomeCopy> = {
     label: "Can't reach OneDrive",
     detail: "Couldn't reach OneDrive — will try again automatically",
     needsAttention: false,
+  },
+
+  /*
+    Phase 5 (single-writer sync model) - this device has its own unsynced
+    changes AND the cloud moved to something this device never confirmed
+    matches. Neither side was overwritten - see
+    cloudSyncEngine.ts's pushLocalSnapshot()/pullCloudSnapshot() for
+    exactly where this is detected. Retrying automatically would just
+    find the same disagreement again, so this needs a real decision -
+    Phase 6 adds the actual resolution path; for now this is purely
+    informational (no resolution UI exists yet).
+  */
+  diverged: {
+    label: 'Sync paused',
+    detail:
+      'This device and OneDrive both have changes; nothing was overwritten. ' +
+      'Resolution comes in the next update.',
+    needsAttention: true,
   },
 
 }

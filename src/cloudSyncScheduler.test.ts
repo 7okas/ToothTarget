@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./cloudSyncEngine', () => ({
   syncCloudNow: vi.fn(),
+  pullCloudSnapshot: vi.fn(),
+  markLocalDataDirty: vi.fn(),
 }))
 
 /*
@@ -17,11 +19,12 @@ vi.mock('./cloudBackupRotation', () => ({
   maybeRotateBackup: vi.fn(),
 }))
 
-import { syncCloudNow } from './cloudSyncEngine'
+import { syncCloudNow, pullCloudSnapshot } from './cloudSyncEngine'
 import { maybeRotateBackup } from './cloudBackupRotation'
 import {
   requestCloudSync,
   requestCloudSyncIfSignedIn,
+  requestCloudPullIfSignedIn,
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
   getPendingStaleReview,
@@ -35,6 +38,7 @@ import {
 } from './cloudSyncScheduler'
 
 const mockedSyncCloudNow = vi.mocked(syncCloudNow)
+const mockedPullCloudSnapshot = vi.mocked(pullCloudSnapshot)
 const mockedMaybeRotateBackup = vi.mocked(maybeRotateBackup)
 
 /*
@@ -55,6 +59,11 @@ beforeEach(() => {
   __resetCloudSyncSchedulerForTests()
   mockedSyncCloudNow.mockReset()
   mockedSyncCloudNow.mockResolvedValue({
+    status: 'synced',
+    patientNumberConflicts: [],
+  })
+  mockedPullCloudSnapshot.mockReset()
+  mockedPullCloudSnapshot.mockResolvedValue({
     status: 'synced',
     patientNumberConflicts: [],
   })
@@ -355,6 +364,57 @@ describe('requestCloudSyncIfSignedIn - automatic triggers (Phase 2)', () => {
 
 })
 
+describe('requestCloudPullIfSignedIn - app open / fresh sign-in / gate retry (Phase 5)', () => {
+
+  it('calls pullCloudSnapshot(), not syncCloudNow(), when signed in', async () => {
+
+    requestCloudPullIfSignedIn(true)
+
+    await flushMicrotasks()
+
+    expect(mockedPullCloudSnapshot).toHaveBeenCalledTimes(1)
+    expect(mockedSyncCloudNow).not.toHaveBeenCalled()
+
+  })
+
+  it('does not start, or even schedule, a pull when signed out', async () => {
+
+    requestCloudPullIfSignedIn(false)
+
+    await flushMicrotasks(10)
+
+    expect(mockedPullCloudSnapshot).not.toHaveBeenCalled()
+    expect(mockedSyncCloudNow).not.toHaveBeenCalled()
+    expect(getCloudSyncStatus()).toBe('idle')
+
+  })
+
+  it('a pull request always wins over an already-pending push', async () => {
+
+    requestCloudSync() // queues a push
+    requestCloudPullIfSignedIn(true) // upgrades the pending operation to a pull
+
+    await flushMicrotasks()
+
+    expect(mockedPullCloudSnapshot).toHaveBeenCalledTimes(1)
+    expect(mockedSyncCloudNow).not.toHaveBeenCalled()
+
+  })
+
+  it('a push requested while a pull is still only PENDING (not yet started) does not downgrade it back to a push', async () => {
+
+    requestCloudPullIfSignedIn(true)
+    requestCloudSync()
+
+    await flushMicrotasks()
+
+    expect(mockedPullCloudSnapshot).toHaveBeenCalledTimes(1)
+    expect(mockedSyncCloudNow).not.toHaveBeenCalled()
+
+  })
+
+})
+
 describe('cloud sync status', () => {
 
   it('reports idle, pending, syncing, then idle again for a successful sync', async () => {
@@ -483,7 +543,16 @@ describe('stale-record review (Phase 4.7)', () => {
 
   })
 
-  it('resumeSyncAfterStaleReview requests exactly one more sync with skipStaleReviewCheck set', async () => {
+  it('resumeSyncAfterStaleReview requests exactly one more sync', async () => {
+
+    /*
+      Phase 5 (single-writer sync model) - the stale-review gate this
+      used to skip is no longer reachable through syncCloudNow() at
+      all (it now calls pushLocalSnapshot(), which has no such gate),
+      so syncCloudNow() is called with no arguments at all here - but
+      resumeSyncAfterStaleReview() still requests exactly one more
+      attempt, the one behavior this test actually guards.
+    */
 
     mockedSyncCloudNow.mockResolvedValueOnce({
       status: 'stale-review-required',
@@ -494,7 +563,6 @@ describe('stale-record review (Phase 4.7)', () => {
     await flushMicrotasks()
 
     expect(mockedSyncCloudNow).toHaveBeenCalledTimes(1)
-    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(1, undefined)
 
     mockedSyncCloudNow.mockResolvedValueOnce({
       status: 'synced',
@@ -505,13 +573,10 @@ describe('stale-record review (Phase 4.7)', () => {
     await flushMicrotasks()
 
     expect(mockedSyncCloudNow).toHaveBeenCalledTimes(2)
-    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(2, {
-      skipStaleReviewCheck: true,
-    })
 
   })
 
-  it('only the ONE resumed attempt skips the gate - a later, unrelated mutation checks again normally', async () => {
+  it('a later, unrelated mutation after a resumed review still requests its own sync normally', async () => {
 
     mockedSyncCloudNow.mockResolvedValueOnce({
       status: 'stale-review-required',
@@ -529,9 +594,7 @@ describe('stale-record review (Phase 4.7)', () => {
     resumeSyncAfterStaleReview()
     await flushMicrotasks()
 
-    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(2, {
-      skipStaleReviewCheck: true,
-    })
+    expect(mockedSyncCloudNow).toHaveBeenCalledTimes(2)
 
     mockedSyncCloudNow.mockResolvedValueOnce({
       status: 'synced',
@@ -541,7 +604,7 @@ describe('stale-record review (Phase 4.7)', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(mockedSyncCloudNow).toHaveBeenNthCalledWith(3, undefined)
+    expect(mockedSyncCloudNow).toHaveBeenCalledTimes(3)
 
   })
 

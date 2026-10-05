@@ -7,31 +7,34 @@ import {
   type CloudSyncDocument,
 } from './cloudSync'
 
-import {
-  mergeCloudSyncDocuments,
-  pruneExpiredTombstones,
-  type PatientNumberConflict,
-} from './cloudMerge'
+/*
+  mergeCloudSyncDocuments()/pruneExpiredTombstones() (cloudMerge.ts),
+  recordAndReconcilePatientNumberConflicts() (patientNumberConflicts.ts),
+  isDeviceSyncStale()/findStaleReviewCandidates() (deviceSyncTracking.ts/
+  staleRecordReview.ts) are no longer imported here - Phase 5 (single-
+  writer sync model) removed their one caller in this file (the old
+  performSync()). None of those modules themselves were touched; they
+  keep compiling and keep passing their own tests, simply with one
+  fewer caller. PatientNumberConflict/StaleReviewCandidate stay as
+  type-only imports - CloudSyncResult's own type still carries them
+  (patientNumberConflicts on every success; the now-unconstructed-from-
+  here 'stale-review-required' variant still exists in the union, per
+  this phase's own instruction to keep that shape unchanged).
+*/
+import type { PatientNumberConflict } from './cloudMerge'
 
 import {
   readCloudSyncDocument,
   writeCloudSyncDocument,
+  type CloudSyncReadResult,
   type CloudSyncTransportFailure,
 } from './cloudStorage'
 
 import type { CloudSyncCorruptionDiagnosis } from './cloudSyncCorruptionDiagnosis'
 
-import { recordAndReconcilePatientNumberConflicts } from './patientNumberConflicts'
+import { recordDeviceSyncSuccess } from './deviceSyncTracking'
 
-import {
-  isDeviceSyncStale,
-  recordDeviceSyncSuccess,
-} from './deviceSyncTracking'
-
-import {
-  findStaleReviewCandidates,
-  type StaleReviewCandidate,
-} from './staleRecordReview'
+import type { StaleReviewCandidate } from './staleRecordReview'
 
 /*
   CLOUD SYNC ENGINE (Phase 6 - orchestration)
@@ -129,15 +132,137 @@ const NEXT_PATIENT_NUMBER_KEY = 'toothTargetNextPatientNumber'
   Phase 3's own local synchronized-document timestamp (section 3) -
   deliberately NOT part of CloudSyncDocument itself (that type has no
   extra field for it). Read as the LOCAL candidate document's
-  updatedAt when building it for a merge, and only ever written by
-  this module's own commitLocalState(), to the value the merge just
-  produced - never bumped merely because a sync was attempted, and
-  never bumped by any other local mutation (patient/treatment/
-  template/procedure/tombstone changes do not touch this key, since
-  wiring that up belongs to the next phase along with the sync
-  triggers themselves).
+  updatedAt when building it for a push, and only ever written by this
+  module's own commit helpers, to the value a push/pull just produced -
+  never bumped merely because a sync was attempted.
+
+  Phase 5 (single-writer sync model) repurposes this exact key as "the
+  cloud updatedAt this device last confirmed matches" - the one piece
+  of state pushLocalSnapshot()/pullCloudSnapshot() compare the cloud's
+  CURRENT updatedAt against before ever writing anything. See
+  isLocalDataDirty() below for the other half of that same decision
+  (does LOCAL have anything the last confirmed state doesn't).
 */
 const LOCAL_SYNC_UPDATED_AT_KEY = 'toothTargetCloudSyncUpdatedAt'
+
+/*
+  Paired with LOCAL_SYNC_UPDATED_AT_KEY above, written and read
+  alongside it everywhere - updatedAt is the user-facing "cloud version
+  this device last knew about" the Phase 5 plan names explicitly, but
+  it only has MILLISECOND resolution: two pushes (eg. from two
+  different devices, or even this device racing itself) can genuinely
+  land in the same millisecond and produce the exact same updatedAt
+  string despite being two different writes. The ETag OneDrive/the
+  fake transport already hands back on every read/write never collides
+  like that - it is a real, server-assigned version identifier - so it
+  is what the divergence checks below actually compare; updatedAt
+  keeps its role as the human-meaningful "when," never the precise
+  "which version" decision.
+*/
+const LOCAL_SYNC_ETAG_KEY = 'toothTargetCloudSyncETag'
+
+/*
+  LOCAL CHANGE TRACKING (Phase 5 - single-writer sync model)
+
+  Answers "does local have anything not yet reflected by the last
+  successful push/pull?" without ever diffing individual records (that's
+  Phase 6's job) - a plain change counter instead.
+
+  toothTargetLocalChangeCounter is bumped by markLocalDataDirty(),
+  called from cloudSyncScheduler.ts's requestCloudSync() - already the
+  one choke point every synchronized mutation in this app goes through
+  (patient/treatment/template/procedure create-edit-delete), so this
+  needs no new call sites anywhere else.
+
+  toothTargetLastSyncedChangeCounter is the counter's value AS OF the
+  last successful push or pull-adopt - recorded with whatever value the
+  counter held at the START of that operation (captured before its own
+  first `await`), not whatever the counter happens to read when the
+  operation finishes. This is what makes isLocalDataDirty() correctly
+  report "still dirty" if a new edit landed WHILE a push/pull was in
+  flight: the counter kept moving during that window, but the recorded
+  "as of" value didn't, so the comparison below still disagrees.
+
+  A device that has never recorded either key (never synced before) is
+  NOT assumed clean - it's treated as dirty UNLESS local itself has zero
+  patients and zero saved treatments. This protects data created on this
+  device before Phase 5 ever ran (or before this device ever signed in)
+  from being silently treated as disposable just because no counter
+  exists yet; an empty device, with nothing to protect, is still free to
+  adopt the cloud cleanly on its first pull.
+*/
+
+const LOCAL_CHANGE_COUNTER_KEY = 'toothTargetLocalChangeCounter'
+const LAST_SYNCED_CHANGE_COUNTER_KEY = 'toothTargetLastSyncedChangeCounter'
+
+function readLocalChangeCounter(): number {
+
+  const raw = localStorage.getItem(LOCAL_CHANGE_COUNTER_KEY)
+  const parsed = raw === null ? NaN : Number(raw)
+
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0
+
+}
+
+/*
+  Call after a synchronized-data mutation has already been committed to
+  localStorage - same timing contract cloudSyncScheduler.ts's own
+  requestCloudSync() already documents for itself, since that's its one
+  caller.
+*/
+export function markLocalDataDirty(): void {
+
+  localStorage.setItem(
+    LOCAL_CHANGE_COUNTER_KEY,
+    String(readLocalChangeCounter() + 1)
+  )
+
+}
+
+function readLastSyncedChangeCounter(): number | null {
+
+  const raw = localStorage.getItem(LAST_SYNCED_CHANGE_COUNTER_KEY)
+
+  if (raw === null) {
+    return null
+  }
+
+  const parsed = Number(raw)
+
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+
+}
+
+/*
+  Records the counter value AS OF THE START of the push/pull that just
+  succeeded - see this section's own header comment for why that's the
+  value to record, never whatever the counter reads at this later,
+  "just finished" moment. Exported for pushLocalSnapshot()/
+  pullCloudSnapshot() (added later this phase) to call on success, and
+  directly testable here in the meantime.
+*/
+export function writeLastSyncedChangeCounter(value: number): void {
+
+  localStorage.setItem(LAST_SYNCED_CHANGE_COUNTER_KEY, String(value))
+
+}
+
+export function isLocalDataDirty(): boolean {
+
+  const lastSynced = readLastSyncedChangeCounter()
+
+  if (lastSynced === null) {
+
+    const patients = readLocalArray(PATIENTS_KEY)
+    const savedTreatments = readLocalArray(SAVED_TREATMENTS_KEY)
+
+    return !(patients.length === 0 && savedTreatments.length === 0)
+
+  }
+
+  return readLocalChangeCounter() !== lastSynced
+
+}
 
 function readLocalArray(key: string): unknown[] {
 
@@ -164,6 +289,14 @@ function readLocalArray(key: string): unknown[] {
 function readLocalSyncUpdatedAt(): string | null {
 
   const raw = localStorage.getItem(LOCAL_SYNC_UPDATED_AT_KEY)
+
+  return typeof raw === 'string' && raw.trim() !== '' ? raw : null
+
+}
+
+function readLocalSyncETag(): string | null {
+
+  const raw = localStorage.getItem(LOCAL_SYNC_ETAG_KEY)
 
   return typeof raw === 'string' && raw.trim() !== '' ? raw : null
 
@@ -248,117 +381,118 @@ function buildLocalCloudSyncDocument():
 }
 
 /*
-  An empty synchronized document - used as the "remote" side of a
-  merge when the cloud file doesn't exist yet (section 6), so the
-  create-new-cloud-document path reuses mergeCloudSyncDocuments()
-  itself (sorting/deduping/patient-number-conflict-detection all come
-  for free) instead of a second, separate "just upload local as-is"
-  code path. updatedAt here is irrelevant to the outcome - the merged
-  document's own updatedAt is the newer of the two inputs, and an
-  empty document only ever contributes empty arrays, never a "winning"
-  timestamp on its own (see cloudMerge.ts's pickDocumentUpdatedAt()).
+  ============================================================
+  PHASE 5 - SINGLE-WRITER PUSH
+  ============================================================
+
+  pushLocalSnapshot() is the new push entry point: build the current
+  local state into one document and write it, with no per-record merge
+  at all - the single-writer model this app actually needs (one
+  dentist, one device at a time; OneDrive is a backup, not a
+  collaboration store). Not wired into syncCloudNow() yet in this step -
+  see this file's own CloudSyncResult/syncCloudNow() for the OLD
+  per-record-merge path, still untouched and still exercised by
+  cloudSyncEngine.test.ts until a later step rewires syncCloudNow()
+  itself to call this.
+
+  THE ONE SAFETY CHECK BEFORE EVER WRITING (the Phase 6 hook): compare
+  the cloud document's ACTUAL updatedAt against
+  toothTargetCloudSyncUpdatedAt - this device's record of "the cloud
+  version I last confirmed matches" (see LOCAL_SYNC_UPDATED_AT_KEY's own
+  comment above). A mismatch means something else changed the cloud
+  since this device last knew about it - this device refuses to
+  silently overwrite that with its own (possibly older, possibly just
+  different) local state, and returns 'diverged' instead. Phase 6
+  replaces this with real per-record conflict listing; nothing else
+  about this function needs to change for that to plug in here.
 */
 
-function emptyCloudSyncDocument(localUpdatedAt: string): CloudSyncDocument {
-  return {
-    schemaVersion: CLOUD_SYNC_SCHEMA_VERSION,
-    app: CLOUD_SYNC_APP,
-    updatedAt: localUpdatedAt,
-    patients: [],
-    savedTreatments: [],
-    customTemplates: [],
-    customProcedures: [],
-    deletionTombstones: [],
+/*
+  Shared by pushLocalSnapshot() and pullCloudSnapshot() (added later
+  this phase) - every CloudSyncReadResult status that ISN'T 'not-found'
+  or 'found' is a transport/corruption failure this device can't do
+  anything about itself, and both callers need to forward it identically
+  (the exact same shapes the OLD performSync() already returns for each
+  one, so CloudCorruptionRecoveryDialog.tsx/the badge keep working
+  unmodified). Returns null for 'not-found'/'found', which the caller
+  still needs to handle itself (this function has no opinion on what a
+  successful read should do next).
+*/
+function classifyCloudReadFailure(
+  cloudRead: CloudSyncReadResult
+): CloudSyncResult | null {
+
+  switch (cloudRead.status) {
+
+    case 'not-found':
+    case 'found':
+      return null
+
+    case 'malformed-json':
+    case 'invalid-document':
+      return {
+        status: 'cloud-invalid',
+        detail: cloudRead.detail,
+        diagnosis: cloudRead.diagnosis,
+      }
+
+    case 'auth-failed':
+      return { status: 'auth-failed' }
+
+    case 'permission-denied':
+      return { status: 'permission-denied', detail: cloudRead.detail }
+
+    case 'network-unreachable':
+      return { status: 'network-unreachable', detail: cloudRead.detail }
+
+    case 'graph-error':
+      return { status: 'graph-error', detail: cloudRead.detail }
+
   }
+
 }
 
 /*
-  LOCAL COMMIT
-
-  Runs only after a successful conditional cloud write, using the
-  EXACT document that was just uploaded. Writes the five synchronized
-  keys, reconciles (never replaces) the local-only patient-number
-  counter, and advances the local sync timestamp. See this file's
-  header comment for why the non-atomicity of these separate
-  localStorage.setItem() calls is safe under this app's merge model.
-
-  Built-in TEMPLATES are preserved by reading whatever is CURRENTLY
-  persisted and keeping only its isCustom === false entries - the
-  exact same pattern cloudBackup.ts's applyCloudRestore() already
-  uses for the same reason (built-in templates are never part of the
-  cloud document and must never be replaced or duplicated by this
-  write). This does NOT apply to PROCEDURES any more (Phase 2, Sync &
-  Statistics Redesign) - every procedure, including a former
-  "built-in", is now part of the cloud document, so
-  mergedDocument.customProcedures is written as-is, exactly like
-  patients/savedTreatments above, with no built-in-preserving split
-  and - deliberately - no "skip if empty" guard: an empty result here
-  can be the entirely legitimate outcome of an old-style 'procedure'
-  tombstone (recorded by the pre-Phase-2 delete flow) finally
-  suppressing a stale custom procedure a device still had locally
-  (see cloudSync.integration.test.ts's own "offline resurrection
-  prevention" coverage) - skipping that write would let the deleted
-  record keep reappearing locally forever. A virgin device's very
-  first sync legitimately producing an empty result here is not a
-  new risk this introduces: buildLocalCloudSyncDocument() already
-  read an empty local array in that same case before Phase 2 (nothing
-  persisted yet to filter down to isCustom === true either), so this
-  write was already "[]" in that scenario beforehand too - App.tsx's
-  own mount-time load effect already treats an empty persisted
-  procedures array as "fall back to the built-in default list," so
-  nothing here is newly lossy.
+  Lighter than the OLD commitLocalState(): a push never changes what
+  patients/savedTreatments/customTemplates/customProcedures already are
+  (they're exactly what was just read and uploaded), so only the
+  sync-tracking state needs advancing - the cloud version this device
+  now knows about, the change counter "as of" this push (captured by the
+  CALLER before this push's first await - see this function's own
+  counterAtStart parameter), the device's own last-successful-sync
+  timestamp, and (same reconciliation commitLocalState() already uses)
+  the local patient-number counter.
 */
-
-function commitLocalState(
-  mergedDocument: CloudSyncDocument,
-  nowIso: string
+function recordSuccessfulPush(
+  document: CloudSyncDocument,
+  nowIso: string,
+  counterAtStart: number,
+  eTag: string | null
 ): void {
 
-  localStorage.setItem(
-    PATIENTS_KEY,
-    JSON.stringify(mergedDocument.patients)
-  )
-
-  localStorage.setItem(
-    SAVED_TREATMENTS_KEY,
-    JSON.stringify(mergedDocument.savedTreatments)
-  )
-
-  const currentTemplates = readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[]
-
-  const builtInTemplates =
-    currentTemplates.filter(template => template.isCustom === false)
-
-  localStorage.setItem(
-    TEMPLATES_KEY,
-    JSON.stringify([...builtInTemplates, ...mergedDocument.customTemplates])
-  )
-
-  localStorage.setItem(
-    PROCEDURES_KEY,
-    JSON.stringify(mergedDocument.customProcedures)
-  )
-
-  localStorage.setItem(
-    TOMBSTONES_KEY,
-    JSON.stringify(mergedDocument.deletionTombstones)
-  )
+  localStorage.setItem(LOCAL_SYNC_UPDATED_AT_KEY, document.updatedAt)
 
   /*
-    Reconcile only - never derived from, or replaced by, the cloud
-    document (which carries no counter at all). A patient-number
-    conflict (two patients sharing a number) never bumps this beyond
-    highest+1 on its own account; it is exactly the same "highest
-    assigned + 1, never less than what's already persisted" invariant
-    App.tsx's own allocatePatientUnderLock()/
-    patientNumberConflicts.ts's resolvePatientNumberConflictUnderLock()
-    already use.
+    See LOCAL_SYNC_ETAG_KEY's own comment - this is the actual value
+    the next push/pull's divergence check compares against, since
+    updatedAt alone can collide across two genuinely different writes.
+    A write that somehow succeeds with no eTag at all (not expected in
+    practice) clears this instead of storing a false one, so the NEXT
+    attempt honestly treats the cloud version as unconfirmed again
+    rather than trusting a value this write never actually got.
   */
+  if (eTag !== null) {
+    localStorage.setItem(LOCAL_SYNC_ETAG_KEY, eTag)
+  } else {
+    localStorage.removeItem(LOCAL_SYNC_ETAG_KEY)
+  }
+
+  writeLastSyncedChangeCounter(counterAtStart)
 
   const storedNextPatientNumber = readPersistedNextPatientNumber()
 
   const highestAssignedPatientNumber =
-    mergedDocument.patients.reduce(
+    document.patients.reduce(
       (highest, patient) =>
         patient.patientNumber > highest ? patient.patientNumber : highest,
       0
@@ -376,18 +510,449 @@ function commitLocalState(
 
   }
 
-  localStorage.setItem(LOCAL_SYNC_UPDATED_AT_KEY, mergedDocument.updatedAt)
+  recordDeviceSyncSuccess(nowIso)
+
+}
+
+export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
 
   /*
-    Phase 4.7 - the one point in this whole module where a sync is
-    genuinely, fully complete (cloud write already succeeded, and every
-    local write above just succeeded too, all inside the same try/catch
-    performSync() wraps this call in) - see deviceSyncTracking.ts's own
-    header comment for why this is deliberately a DEVICE fact, not an
-    account one, and therefore lives as its own write here rather than
-    inside the account-scoped keys above.
+    Captured before this function's first await, synchronously - see
+    recordSuccessfulPush()'s own comment and this phase's own header
+    comment on LOCAL_CHANGE_COUNTER_KEY for why the counter value AT
+    THIS MOMENT, not whenever this function happens to finish, is what
+    correctly keeps local "still dirty" if a new edit lands while this
+    push is in flight.
   */
+  const counterAtStart = readLocalChangeCounter()
+
+  const localResult = buildLocalCloudSyncDocument()
+
+  if (!localResult.valid) {
+    return { status: 'validation-failed', detail: localResult.error }
+  }
+
+  const cloudRead = await readCloudSyncDocument()
+
+  const readFailure = classifyCloudReadFailure(cloudRead)
+
+  if (readFailure) {
+    return readFailure
+  }
+
+  /*
+    The ETag, not updatedAt, is the PRE-WRITE comparison - see
+    LOCAL_SYNC_ETAG_KEY's own comment for why: updatedAt only has
+    millisecond resolution, so two genuinely different writes (eg. this
+    device racing another, or even racing itself in a fast test) can
+    share the exact same updatedAt string without the ETag ever
+    colliding the same way. knownCloudUpdatedAt is read too, for the
+    one place below that specifically compares it per this phase's own
+    spec (the one-retry-after-412 check) - see that check's own
+    comment for why updatedAt, not ETag, is deliberately used there.
+  */
+  const knownCloudETag = readLocalSyncETag()
+  const knownCloudUpdatedAt = readLocalSyncUpdatedAt()
+
+  const divergedResult: CloudSyncResult = {
+    status: 'diverged',
+    detail:
+      'This device has unsynced changes, and the cloud data has changed ' +
+      'since this device last synced. Neither side was overwritten.',
+  }
+
+  /*
+    A cloud document already exists, but this device has no record of
+    ever having confirmed a cloud version (knownCloudETag === null) -
+    never push blindly over that. The normal path for a never-synced
+    device is pullCloudSnapshot() running first (app open/sign-in), which
+    only ever delegates here with a non-null knownCloudETag already
+    confirmed to match (see that function's own comment) - this check
+    only ever fires for the rare direct-push-before-any-pull case, and
+    it fires on purpose: a device with no memory of the cloud's content
+    must never silently overwrite a document it knows nothing about.
+  */
+  if (
+    cloudRead.status === 'found' &&
+    (knownCloudETag === null || cloudRead.eTag !== knownCloudETag)
+  ) {
+    return divergedResult
+  }
+
+  const expectedETag = cloudRead.status === 'found' ? cloudRead.eTag : null
+
+  const nowIso = new Date().toISOString()
+
+  /*
+    Per this phase's own instruction: tombstones are no longer part of
+    what's pushed (always an empty list from here on), even though local
+    deletion flows keep writing them locally, inertly, until Phase 7
+    removes that machinery too. updatedAt is stamped fresh here, for
+    THIS snapshot, rather than reused from whatever the local build step
+    read.
+  */
+  const documentToWrite: CloudSyncDocument = {
+    ...localResult.document,
+    updatedAt: nowIso,
+    deletionTombstones: [],
+  }
+
+  let writeResult = await writeCloudSyncDocument(documentToWrite, expectedETag)
+
+  if (writeResult.status === 'precondition-failed') {
+
+    /*
+      ONE BOUNDED RETRY, per this phase's own spec - deliberately
+      compares updatedAt here (not the ETag the pre-write check above
+      uses): a genuine last-instant race between our read and our
+      write attempt (something else wrote in that exact window).
+      Re-read once: if the cloud's updatedAt still matches what this
+      device already knew before this push started, retry the write
+      once with the fresh ETag. If it now differs, that's a real
+      divergence - report it the same way the pre-write check above
+      would have. No loop, no re-merge: there is nothing to merge
+      against in this model.
+    */
+
+    const retryRead = await readCloudSyncDocument()
+
+    const retryReadFailure = classifyCloudReadFailure(retryRead)
+
+    if (retryReadFailure) {
+      return retryReadFailure
+    }
+
+    const stillMatchesWhatWeKnew =
+      retryRead.status === 'found' &&
+      knownCloudUpdatedAt !== null &&
+      retryRead.document.updatedAt === knownCloudUpdatedAt
+
+    if (!stillMatchesWhatWeKnew) {
+      return divergedResult
+    }
+
+    writeResult = await writeCloudSyncDocument(
+      documentToWrite,
+      retryRead.status === 'found' ? retryRead.eTag : null
+    )
+
+    if (writeResult.status === 'precondition-failed') {
+      return divergedResult
+    }
+
+  }
+
+  if (writeResult.status === 'auth-failed') {
+    return { status: 'auth-failed' }
+  }
+
+  if (writeResult.status === 'permission-denied') {
+    return { status: 'permission-denied', detail: writeResult.detail }
+  }
+
+  if (writeResult.status === 'network-unreachable') {
+    return { status: 'network-unreachable', detail: writeResult.detail }
+  }
+
+  if (writeResult.status === 'graph-error') {
+    return { status: 'graph-error', detail: writeResult.detail }
+  }
+
+  if (writeResult.status === 'invalid-document') {
+    /*
+      Shouldn't happen - localResult.valid was already confirmed above -
+      but the transport layer re-validates independently and this
+      module never assumes away a disagreement between the two (same
+      reasoning the OLD performSync() already documents for itself).
+    */
+    return { status: 'validation-failed', detail: writeResult.detail }
+  }
+
+  // writeResult.status === 'written' from here on. The cloud already
+  // has this device's data - a failure past this point is a LOCAL
+  // bookkeeping problem, never grounds to report anything other than
+  // 'cloud-committed-locally-pending' (same honesty discipline the OLD
+  // performSync()/commitLocalState() pairing already followed: never
+  // claim 'synced' if the local half of that didn't actually happen).
+  try {
+
+    recordSuccessfulPush(documentToWrite, nowIso, counterAtStart, writeResult.eTag)
+
+  } catch (error) {
+
+    const detail = error instanceof Error ? error.message : String(error)
+
+    return {
+      status: 'cloud-committed-locally-pending',
+      detail:
+        `The cloud document was updated successfully, but saving it locally failed (${detail}). ` +
+        'The local data itself is unaffected; only this device\'s own ' +
+        'record of having synced may be out of date until a future sync ' +
+        'attempt succeeds.',
+    }
+
+  }
+
+  return { status: 'synced', patientNumberConflicts: [] }
+
+}
+
+/*
+  ============================================================
+  PHASE 5 - SINGLE-WRITER PULL
+  ============================================================
+
+  pullCloudSnapshot() is the "app open while signed in" / "fresh
+  sign-in" entry point: read the cloud, and either adopt it as local
+  (local has nothing of its own at risk) or fall back to a push (local
+  is ahead of a cloud that hasn't moved) or stop at 'diverged' (both
+  sides moved - the same Phase 6 hook pushLocalSnapshot() uses above).
+  Not wired into any trigger yet in this step.
+*/
+
+const PRE_ADOPT_SAFETY_COPY_KEY = 'toothTargetPreAdoptSafetyCopy'
+
+/*
+  Amendment 3 - a single, overwritten-each-time (never accumulated)
+  local-only safety copy of whatever local synced data is about to be
+  replaced by a pull's adoption step, captured synchronously
+  immediately before that replacement happens. Deliberately excluded
+  from everything else: buildLocalCloudSyncDocument() never reads this
+  key (so it can never reach the cloud), and it is never added to
+  cloudBackup.ts's own key lists (so it's never part of a manual backup
+  either) - this exists purely as this device's own undo-adjacent
+  breadcrumb, nothing more. No UI reads it yet. Best-effort, wrapped in
+  try/catch exactly like saveAccountCache() already is - a failure here
+  must never block the adoption it exists to protect against.
+*/
+function writePreAdoptSafetyCopy(): void {
+
+  try {
+
+    const snapshot = {
+      capturedAt: new Date().toISOString(),
+      patients: readLocalArray(PATIENTS_KEY),
+      savedTreatments: readLocalArray(SAVED_TREATMENTS_KEY),
+      customTemplates:
+        (readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[]).filter(
+          template => template.isCustom === true
+        ),
+      customProcedures: readLocalArray(PROCEDURES_KEY),
+      deletionTombstones: readLocalArray(TOMBSTONES_KEY),
+    }
+
+    localStorage.setItem(PRE_ADOPT_SAFETY_COPY_KEY, JSON.stringify(snapshot))
+
+  } catch (error) {
+
+    console.error(
+      'Cloud sync: could not save a safety copy of local data before ' +
+      'adopting the cloud snapshot - proceeding anyway (this copy is ' +
+      'only an extra safeguard; nothing here is at risk of being lost ' +
+      'either way).',
+      error
+    )
+
+  }
+
+}
+
+/*
+  Adopts `document` as local truth - patients/savedTreatments/
+  customProcedures replace wholesale (this device had nothing of its
+  own worth keeping, per the caller's own clean-to-adopt check), and
+  templates keep this device's built-ins and replace only the custom
+  ones, the same pattern commitLocalState()/applyCloudRestore() already
+  use for the identical reason. Deliberately does NOT touch
+  toothTargetDeletionTombstones - per this phase's own instruction,
+  tombstones no longer decide anything in the normal path, so there is
+  nothing meaningful to adopt from the cloud's (always-empty, from this
+  phase on) field, and nothing to overwrite locally either; local
+  deletion flows keep writing their own copies there, inertly, until
+  Phase 7.
+*/
+function adoptCloudSnapshotLocally(
+  document: CloudSyncDocument,
+  nowIso: string,
+  counterAtAdopt: number,
+  eTag: string | null
+): void {
+
+  localStorage.setItem(PATIENTS_KEY, JSON.stringify(document.patients))
+
+  localStorage.setItem(
+    SAVED_TREATMENTS_KEY,
+    JSON.stringify(document.savedTreatments)
+  )
+
+  const currentTemplates = readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[]
+
+  const builtInTemplates =
+    currentTemplates.filter(template => template.isCustom === false)
+
+  localStorage.setItem(
+    TEMPLATES_KEY,
+    JSON.stringify([...builtInTemplates, ...document.customTemplates])
+  )
+
+  localStorage.setItem(
+    PROCEDURES_KEY,
+    JSON.stringify(document.customProcedures)
+  )
+
+  const storedNextPatientNumber = readPersistedNextPatientNumber()
+
+  const highestAssignedPatientNumber =
+    document.patients.reduce(
+      (highest, patient) =>
+        patient.patientNumber > highest ? patient.patientNumber : highest,
+      0
+    )
+
+  const reconciledNextPatientNumber =
+    Math.max(storedNextPatientNumber, highestAssignedPatientNumber + 1)
+
+  if (reconciledNextPatientNumber !== storedNextPatientNumber) {
+
+    localStorage.setItem(
+      NEXT_PATIENT_NUMBER_KEY,
+      JSON.stringify(reconciledNextPatientNumber)
+    )
+
+  }
+
+  localStorage.setItem(LOCAL_SYNC_UPDATED_AT_KEY, document.updatedAt)
+
+  if (eTag !== null) {
+    localStorage.setItem(LOCAL_SYNC_ETAG_KEY, eTag)
+  } else {
+    localStorage.removeItem(LOCAL_SYNC_ETAG_KEY)
+  }
+
+  writeLastSyncedChangeCounter(counterAtAdopt)
+
   recordDeviceSyncSuccess(nowIso)
+
+}
+
+export async function pullCloudSnapshot(): Promise<CloudSyncResult> {
+
+  const cloudRead = await readCloudSyncDocument()
+
+  const readFailure = classifyCloudReadFailure(cloudRead)
+
+  if (readFailure) {
+    return readFailure
+  }
+
+  if (cloudRead.status === 'not-found') {
+    /*
+      Nothing to pull. If local has its own data, this is exactly
+      "first sign-in on a device that already has local data" (or a
+      first-ever sync on a brand-new one, where pushing an empty
+      document is a harmless no-op) - either way, the right move is to
+      push, not to invent a cloud document here ourselves.
+    */
+    return pushLocalSnapshot()
+  }
+
+  if (cloudRead.status !== 'found') {
+    /*
+      Unreachable - classifyCloudReadFailure() above already handles
+      every CloudSyncReadResult status except 'not-found'/'found', and
+      'not-found' was just handled too. Kept as an explicit, honest
+      guard (never a type assertion) so TypeScript's own narrowing
+      stays sound below, the same "never assume away a disagreement"
+      discipline this file already applies elsewhere.
+    */
+    return { status: 'validation-failed', detail: 'Unexpected cloud read result.' }
+  }
+
+  /*
+    ETag, not updatedAt - see LOCAL_SYNC_ETAG_KEY's own comment
+    (same reasoning pushLocalSnapshot() already applies to itself).
+  */
+  const knownCloudETag = readLocalSyncETag()
+
+  const cloudChangedSinceKnown =
+    knownCloudETag === null || cloudRead.eTag !== knownCloudETag
+
+  /*
+    AMENDMENT 2 - PULL-SIDE RACE GUARD
+
+    Evaluated synchronously, right here - immediately after this
+    function's only await, and before any localStorage.setItem() that
+    would overwrite synced data. This is what correctly catches a save
+    that landed WHILE the cloud read above was in flight: isLocalDataDirty()
+    re-reads the live counter fresh at this exact moment, so if an edit
+    happened during that await, this now reports dirty even if it
+    wasn't dirty when this function started - and the counter value
+    captured here (counterAtAdopt) is the exact "as of" value recorded
+    on success, so a later edit that lands AFTER this point is still
+    correctly detected as unsynced on the next sync attempt.
+  */
+  const counterAtAdopt = readLocalChangeCounter()
+  const cleanToAdopt = !isLocalDataDirty()
+
+  if (cleanToAdopt) {
+
+    writePreAdoptSafetyCopy()
+
+    /*
+      Same honesty discipline pushLocalSnapshot() applies to its own
+      local commit: a thrown localStorage write here (eg. a quota
+      error) happens AFTER this function has already decided adopting
+      is safe, so it must never be reported as a silent 'synced' - the
+      cloud is unaffected either way (a pull never writes to it), only
+      this device's own local copy may be left partially updated.
+    */
+    try {
+
+      adoptCloudSnapshotLocally(
+        cloudRead.document,
+        new Date().toISOString(),
+        counterAtAdopt,
+        cloudRead.eTag
+      )
+
+    } catch (error) {
+
+      const detail = error instanceof Error ? error.message : String(error)
+
+      return {
+        status: 'cloud-committed-locally-pending',
+        detail:
+          `Adopting the cloud data failed partway through (${detail}). ` +
+          'A future sync attempt will retry.',
+      }
+
+    }
+
+    return { status: 'synced', patientNumberConflicts: [] }
+
+  }
+
+  /*
+    Local is dirty - either it already was when this function started,
+    or it just became dirty during the read above. Either way, adopting
+    the cloud now would destructively overwrite real local work, so
+    this never reaches adoptCloudSnapshotLocally() from here.
+  */
+
+  if (!cloudChangedSinceKnown) {
+    // Local is ahead of a cloud that hasn't moved - flush it up instead
+    // of discarding it.
+    return pushLocalSnapshot()
+  }
+
+  // Both sides have unreconciled changes - the Phase 6 hook, same as
+  // pushLocalSnapshot()'s own divergence check.
+  return {
+    status: 'diverged',
+    detail:
+      'This device has unsynced changes, and the cloud data has changed ' +
+      'since this device last synced. Neither side was overwritten.',
+  }
 
 }
 
@@ -441,299 +1006,48 @@ export type CloudSyncResult =
       diagnosis?: CloudSyncCorruptionDiagnosis
     }
   | { status: 'validation-failed'; detail: string }
+  /*
+    Phase 5 (single-writer sync model) - local has its own unsynced
+    changes AND the cloud document has moved to an updatedAt this device
+    never confirmed matches (see pushLocalSnapshot()/pullCloudSnapshot()'s
+    own comments for exactly where this is checked). Neither side is
+    written in this state - this is the honest "cannot safely guess which
+    side wins without per-record comparison" stop, which Phase 6's real
+    conflict detection will replace with an actual resolution path.
+  */
+  | { status: 'diverged'; detail: string }
   | CloudSyncTransportFailure
 
-const MAX_SYNC_ATTEMPTS = 3
-
+/*
+  Phase 5 (single-writer sync model) removed this type's one real
+  consumer (the old per-record-merge performSync(), which used
+  skipStaleReviewCheck to skip its own stale-device review gate) -
+  kept, unused by syncCloudNow() below, per this phase's own
+  instruction not to delete Phase 4.7's stale-review machinery yet.
+  cloudSyncScheduler.ts's resumeSyncAfterStaleReview()/
+  skipStaleReviewCheckOnce still construct/reference this shape.
+*/
 export type PerformSyncOptions = {
-  /*
-    Set by cloudSyncScheduler.ts's resumeSyncAfterStaleReview() for
-    exactly the one sync attempt that follows a completed stale-record
-    review - the dentist has already decided every candidate this
-    device found (kept ones are left as normal local patients, discarded
-    ones are already tombstoned via the app's normal deletion path), so
-    re-running the stale-review gate on THIS attempt would either find
-    nothing new (harmless but pointless) or, worse, re-surface patients
-    that were already decided moments ago. Never persisted, never
-    defaulted to true anywhere else - every other call path (the
-    scheduler's normal flush, app load, sign-in) always re-evaluates
-    staleness fresh, which is exactly what should happen for a genuinely
-    new sync attempt.
-  */
   skipStaleReviewCheck?: boolean
 }
 
-async function performSync(
-  options: PerformSyncOptions = {}
-): Promise<CloudSyncResult> {
-
-  /*
-    Phase 6 - set true the moment ANY attempt in this call hits
-    'precondition-failed' and retries; read once, at the very end, by
-    whichever attempt finally succeeds. See CloudSyncResult's own
-    recoveredFromConflict comment for why this is worth tracking at
-    all - it changes nothing about the retry behavior itself (still the
-    exact same `continue` it always was), only what the eventual
-    success result reports.
-  */
-  let hadContention = false
-
-  for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt++) {
-
-    const nowIso = new Date().toISOString()
-
-    const localResult = buildLocalCloudSyncDocument()
-
-    if (!localResult.valid) {
-      return { status: 'validation-failed', detail: localResult.error }
-    }
-
-    const localDocument = localResult.document
-
-    const cloudRead = await readCloudSyncDocument()
-
-    let remoteDocument: CloudSyncDocument
-    let expectedETag: string | null
-
-    switch (cloudRead.status) {
-
-      case 'not-found':
-        remoteDocument = emptyCloudSyncDocument(localDocument.updatedAt)
-        expectedETag = null
-        break
-
-      case 'found':
-        remoteDocument = cloudRead.document
-        expectedETag = cloudRead.eTag
-        break
-
-      /*
-        PRE-MERGE CORRUPTION GATE
-
-        A corrupt/unreadable live cloud file is rejected right here,
-        as soon as readCloudSyncDocument() reports it - before
-        mergeCloudSyncDocuments() is ever called (that call is further
-        down this same loop body) and before ANY local write happens.
-        This has always been true of this switch (readCloudSyncDocument()
-        already classified both statuses before this document existed);
-        this comment only makes that existing behavior explicit, and
-        the diagnosis it now carries is what lets the corruption-
-        recovery dialog explain WHY, not just THAT, the cloud file was
-        rejected.
-      */
-      case 'malformed-json':
-      case 'invalid-document':
-        return {
-          status: 'cloud-invalid',
-          detail: cloudRead.detail,
-          diagnosis: cloudRead.diagnosis,
-        }
-
-      case 'auth-failed':
-        return { status: 'auth-failed' }
-
-      case 'permission-denied':
-        return { status: 'permission-denied', detail: cloudRead.detail }
-
-      case 'network-unreachable':
-        return { status: 'network-unreachable', detail: cloudRead.detail }
-
-      case 'graph-error':
-        return { status: 'graph-error', detail: cloudRead.detail }
-
-    }
-
-    /*
-      STALE-DEVICE / STALE-RECORD REVIEW GATE (Phase 4.7)
-
-      Checked BEFORE any merge happens (section 3 of this phase's own
-      brief), using exactly the local/remote documents already read
-      above - no extra network round-trip needed. isDeviceSyncStale()
-      is a cheap, purely local, purely time-based check; the (slightly
-      more work) candidate search only ever runs once that's already
-      true, so a device that syncs regularly never pays for it and
-      never sees this gate fire. If candidates come back empty (either
-      because nothing on this device is actually unsynced-and-
-      untombstoned, or because skipStaleReviewCheck is set for a
-      resumed post-review attempt), this falls straight through to the
-      normal merge below - a stale device with nothing new to review
-      has nothing for the dentist to decide and should sync exactly
-      like any other device.
-    */
-
-    if (!options.skipStaleReviewCheck && isDeviceSyncStale(nowIso)) {
-
-      const candidates = findStaleReviewCandidates({
-        localPatients: localDocument.patients,
-        localSavedTreatments: localDocument.savedTreatments,
-        remotePatients: remoteDocument.patients,
-        localTombstones: localDocument.deletionTombstones,
-        remoteTombstones: remoteDocument.deletionTombstones,
-      })
-
-      if (candidates.length > 0) {
-        return { status: 'stale-review-required', candidates }
-      }
-
-    }
-
-    const mergeResult = mergeCloudSyncDocuments(localDocument, remoteDocument)
-
-    /*
-      TOMBSTONE EXPIRY (Phase 4.7) - pruned here, right before this
-      document is validated/uploaded, so tombstones older than
-      cloudMerge.ts's TOMBSTONE_EXPIRY_MS never accumulate in the cloud
-      document either (see pruneExpiredTombstones()'s own comment for
-      why this can't live inside the pure mergeCloudSyncDocuments()
-      itself). The commit-time re-merge below prunes again for the same
-      reason - re-reading local storage there can reintroduce tombstones
-      already-expired-and-dropped here, since local storage isn't
-      rewritten until commitLocalState() runs.
-    */
-    const mergedDocument: CloudSyncDocument = {
-      ...mergeResult.document,
-      deletionTombstones: pruneExpiredTombstones(
-        mergeResult.document.deletionTombstones,
-        nowIso
-      ),
-    }
-
-    const mergeValidation = validateCloudSyncDocument(mergedDocument)
-
-    if (!mergeValidation.valid) {
-      return { status: 'validation-failed', detail: mergeValidation.error }
-    }
-
-    /*
-      Same read this iteration's `expectedETag` came from - never a
-      different iteration's cloud read merged against a different
-      iteration's ETag (section 18). Each loop iteration is fully
-      self-contained: its own read, its own merge, its own write.
-    */
-    const writeResult =
-      await writeCloudSyncDocument(mergeValidation.document, expectedETag)
-
-    if (writeResult.status === 'precondition-failed') {
-      hadContention = true
-      continue
-    }
-
-    if (writeResult.status === 'auth-failed') {
-      return { status: 'auth-failed' }
-    }
-
-    if (writeResult.status === 'permission-denied') {
-      return { status: 'permission-denied', detail: writeResult.detail }
-    }
-
-    if (writeResult.status === 'network-unreachable') {
-      return { status: 'network-unreachable', detail: writeResult.detail }
-    }
-
-    if (writeResult.status === 'graph-error') {
-      return { status: 'graph-error', detail: writeResult.detail }
-    }
-
-    if (writeResult.status === 'invalid-document') {
-      /*
-        Shouldn't happen - mergeValidation.valid was just confirmed
-        above - but transport re-validates independently and this
-        module never assumes away a disagreement between the two.
-      */
-      return { status: 'validation-failed', detail: writeResult.detail }
-    }
-
-    /*
-      writeResult.status === 'written' from here on. The cloud is now
-      authoritatively the merged document - committing locally (and
-      recording conflicts) is bookkeeping for THIS device, not a
-      condition of the sync having succeeded from the cloud's point of
-      view (see this file's header comment on crash safety).
-
-      COMMIT-TIME RE-MERGE (Phase 8 fix)
-
-      `mergedDocument` is a snapshot from BEFORE the two awaited Graph
-      calls above - if a genuinely new local mutation happened while
-      this sync was in flight (eg. the dentist completed a second
-      treatment, or another concurrent syncCloudNow() call in another
-      tab committed first), committing `mergedDocument` verbatim would
-      silently overwrite and permanently lose that newer local data,
-      since it was never part of what got read/merged/uploaded this
-      round. Re-reading local state fresh and merging it against the
-      document that was JUST uploaded - using the exact same pure,
-      idempotent merge engine, purely locally, no network - closes
-      that window: anything genuinely new stays in local storage
-      (the scheduler's own pending-request tracking, or the next
-      meaningful mutation trigger, ensures it also reaches the cloud
-      in a follow-up sync), and anything that was already part of
-      `mergedDocument` is unaffected, since merging is idempotent.
-    */
-
-    const localAtCommitTime = buildLocalCloudSyncDocument()
-
-    const finalMergeResult =
-      localAtCommitTime.valid
-        ? mergeCloudSyncDocuments(localAtCommitTime.document, mergedDocument)
-        : mergeResult
-
-    const finalDocument: CloudSyncDocument = {
-      ...finalMergeResult.document,
-      deletionTombstones: pruneExpiredTombstones(
-        finalMergeResult.document.deletionTombstones,
-        nowIso
-      ),
-    }
-
-    try {
-
-      commitLocalState(finalDocument, nowIso)
-
-    } catch (error) {
-
-      const detail = error instanceof Error ? error.message : String(error)
-
-      return {
-        status: 'cloud-committed-locally-pending',
-        detail:
-          `The cloud document was updated successfully, but saving it locally failed (${detail}). ` +
-          'The next sync will re-read the cloud and converge safely.',
-      }
-
-    }
-
-    const reconciledConflicts =
-      recordAndReconcilePatientNumberConflicts(
-        finalMergeResult.patientNumberConflicts,
-        finalDocument.patients
-      )
-
-    return reconciledConflicts.length > 0
-      ? {
-          status: 'synced-with-conflicts',
-          patientNumberConflicts: reconciledConflicts,
-          recoveredFromConflict: hadContention,
-        }
-      : {
-          status: 'synced',
-          patientNumberConflicts: [],
-          recoveredFromConflict: hadContention,
-        }
-
-  }
-
-  return { status: 'contention', attempts: MAX_SYNC_ATTEMPTS }
-
-}
-
 /*
-  ENTRY POINT
+  ENTRY POINT (push side)
 
-  The only function anything outside this file should call. Guards
+  The only push function anything outside this file should call. Guards
   against overlapping executions IN THIS TAB by returning the same
   in-flight promise to a second caller rather than starting a second,
-  independent merge/write transaction (section 20) - this is a plain
-  module-level promise cache, not a new lock; Web Locks/cross-tab
-  coordination is explicitly out of scope for this phase.
+  independent write transaction - this is a plain module-level promise
+  cache, not a new lock; Web Locks/cross-tab coordination is explicitly
+  out of scope for this phase.
+
+  Phase 5 (single-writer sync model) - now calls pushLocalSnapshot()
+  instead of the old per-record-merge performSync() (removed from this
+  file; see this file's own header comment on what's replaced vs what's
+  untouched elsewhere). `options` is accepted but unused - nothing
+  pushLocalSnapshot() does has a stale-review gate to skip - kept only
+  so cloudSyncScheduler.ts's existing call site keeps compiling; a
+  later step in this same phase removes the pass-through there too.
 */
 
 let inFlightSync: Promise<CloudSyncResult> | null = null
@@ -742,11 +1056,13 @@ export function syncCloudNow(
   options?: PerformSyncOptions
 ): Promise<CloudSyncResult> {
 
+  void options
+
   if (inFlightSync) {
     return inFlightSync
   }
 
-  inFlightSync = performSync(options).finally(() => {
+  inFlightSync = pushLocalSnapshot().finally(() => {
     inFlightSync = null
   })
 
@@ -861,6 +1177,27 @@ type AccountLocalCache = {
     it to another account's most recent value.
   */
   cloudSyncUpdatedAt: string | null
+  /*
+    Paired with cloudSyncUpdatedAt above for the same reason
+    LOCAL_SYNC_ETAG_KEY is paired with LOCAL_SYNC_UPDATED_AT_KEY
+    everywhere else in this file - the ETag, not updatedAt, is what
+    pushLocalSnapshot()/pullCloudSnapshot()'s divergence checks
+    actually compare, so it has to travel with the rest of this
+    account's sync state across a switch too.
+  */
+  cloudSyncETag: string | null
+  /*
+    Phase 5 (single-writer sync model) - the same account-isolation
+    reasoning as cloudSyncUpdatedAt directly above, extended to the new
+    local-change-tracking pair (see this file's own header comment on
+    LOCAL_CHANGE_COUNTER_KEY/LAST_SYNCED_CHANGE_COUNTER_KEY): without
+    this, switching to a different account and back could make
+    isLocalDataDirty() compare one account's counter against another
+    account's "as of" value, or silently forget that an account had
+    unsynced work.
+  */
+  localChangeCounter: number
+  lastSyncedChangeCounter: number | null
 }
 
 function readSyncedAccountId(): string | null {
@@ -903,6 +1240,9 @@ function captureCurrentAccountState(): AccountLocalCache {
     deletionTombstones: readLocalArray(TOMBSTONES_KEY),
     nextPatientNumber: readPersistedNextPatientNumber(),
     cloudSyncUpdatedAt: readLocalSyncUpdatedAt(),
+    cloudSyncETag: readLocalSyncETag(),
+    localChangeCounter: readLocalChangeCounter(),
+    lastSyncedChangeCounter: readLastSyncedChangeCounter(),
   }
 
 }
@@ -964,6 +1304,20 @@ function readAccountCache(accountId: string): AccountLocalCache | null {
           : 1,
       cloudSyncUpdatedAt:
         typeof candidate.cloudSyncUpdatedAt === 'string' ? candidate.cloudSyncUpdatedAt : null,
+      cloudSyncETag:
+        typeof candidate.cloudSyncETag === 'string' ? candidate.cloudSyncETag : null,
+      localChangeCounter:
+        typeof candidate.localChangeCounter === 'number' &&
+        Number.isInteger(candidate.localChangeCounter) &&
+        candidate.localChangeCounter >= 0
+          ? candidate.localChangeCounter
+          : 0,
+      lastSyncedChangeCounter:
+        typeof candidate.lastSyncedChangeCounter === 'number' &&
+        Number.isInteger(candidate.lastSyncedChangeCounter) &&
+        candidate.lastSyncedChangeCounter >= 0
+          ? candidate.lastSyncedChangeCounter
+          : null,
     }
 
   } catch {
@@ -1037,6 +1391,30 @@ function applyAccountCacheToLocalStorage(cache: AccountLocalCache | null): void 
     localStorage.setItem(LOCAL_SYNC_UPDATED_AT_KEY, cache.cloudSyncUpdatedAt)
   } else {
     localStorage.removeItem(LOCAL_SYNC_UPDATED_AT_KEY)
+  }
+
+  if (cache?.cloudSyncETag) {
+    localStorage.setItem(LOCAL_SYNC_ETAG_KEY, cache.cloudSyncETag)
+  } else {
+    localStorage.removeItem(LOCAL_SYNC_ETAG_KEY)
+  }
+
+  if (cache) {
+    localStorage.setItem(
+      LOCAL_CHANGE_COUNTER_KEY,
+      String(cache.localChangeCounter)
+    )
+  } else {
+    localStorage.removeItem(LOCAL_CHANGE_COUNTER_KEY)
+  }
+
+  if (cache?.lastSyncedChangeCounter !== null && cache?.lastSyncedChangeCounter !== undefined) {
+    localStorage.setItem(
+      LAST_SYNCED_CHANGE_COUNTER_KEY,
+      String(cache.lastSyncedChangeCounter)
+    )
+  } else {
+    localStorage.removeItem(LAST_SYNCED_CHANGE_COUNTER_KEY)
   }
 
 }

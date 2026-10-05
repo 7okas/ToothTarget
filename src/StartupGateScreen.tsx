@@ -6,7 +6,7 @@ import {
   subscribeCloudSyncStatus,
   getLastSyncOutcome,
   subscribeLastSyncOutcome,
-  requestCloudSync,
+  requestCloudPullIfSignedIn,
 } from './cloudSyncScheduler'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { describeSyncOutcome } from './syncOutcome'
@@ -167,9 +167,11 @@ export default function StartupGateScreen() {
     if (result.account) {
 
       /*
-        Same account-switch guard and immediate-sync trigger
+        Same account-switch guard and immediate-pull trigger
         MicrosoftAccountSection.tsx's own handleSignIn() uses - see
-        that file's comment for the full reasoning on both.
+        that file's comment for the full reasoning on both. Phase 5
+        (single-writer sync model): a PULL, not a push - same
+        reasoning as every other sign-in trigger.
       */
       if (
         reconcileSyncedAccount(result.account.homeAccountId) === 'switched-account'
@@ -178,7 +180,7 @@ export default function StartupGateScreen() {
         return
       }
 
-      requestCloudSync()
+      requestCloudPullIfSignedIn(true)
 
     }
 
@@ -188,8 +190,16 @@ export default function StartupGateScreen() {
     setState(current => markStartupGatePassed(current))
   }
 
+  /*
+    This gate's own gating attempt is always a pull (app open or a
+    fresh sign-in - see both triggers above) - Retry has to retry the
+    SAME kind of operation, never silently substitute a push. Passing
+    `true` unconditionally is safe: computeStartupGateView() only ever
+    reaches the 'error' view (the one place Retry is rendered) once
+    `hasAccount` is already true.
+  */
   function handleRetry() {
-    requestCloudSync()
+    requestCloudPullIfSignedIn(true)
   }
 
   function handleContinueWithoutSyncing() {
