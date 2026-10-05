@@ -160,6 +160,8 @@ export type ResolveResult = {
     while other things still block - what suggestNumberFixes() needs.
   */
   candidatePatients: Patient[]
+  /* Patients that get a new number from numberFixes, for the final summary. */
+  renumbered: { patientId: string; name: string; from: number; to: number }[]
   /*
     Kept records that already existed at the last sync on the side that
     lacks them (age 'at-or-before') - the dentist must acknowledge
@@ -490,6 +492,7 @@ export function resolveSnapshots(
   /* ---- number fixes, then collision detection (Integrity 5) ---- */
 
   const patientsWithFixes: Patient[] = []
+  const renumbered: ResolveResult['renumbered'] = []
 
   for (const patient of chosen.patient.values()) {
 
@@ -504,6 +507,15 @@ export function resolveSnapshots(
       problems.push({ kind: 'invalid-number-fix', patientId: patient.id, newNumber: fix })
       patientsWithFixes.push(patient)
       continue
+    }
+
+    if (fix !== patient.patientNumber) {
+      renumbered.push({
+        patientId: patient.id,
+        name: patient.name,
+        from: patient.patientNumber,
+        to: fix,
+      })
     }
 
     patientsWithFixes.push(
@@ -635,6 +647,7 @@ export function resolveSnapshots(
     renamedTreatmentIds,
     tally,
     candidatePatients: resolvedPatients,
+    renumbered,
     resurrected,
     maybeResurrected,
     document,

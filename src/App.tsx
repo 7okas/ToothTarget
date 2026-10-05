@@ -49,7 +49,12 @@ import {
   subscribePendingStaleReview,
   resumeSyncAfterStaleReview,
   subscribeLocalDataVersion,
+  notifyLocalDataReplaced,
 } from './cloudSyncScheduler'
+import {
+  hasPendingResolutionMarker,
+  finishPendingResolution,
+} from './syncResolutionEngine'
 import type { StaleReviewCandidate } from './staleRecordReview'
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
@@ -4509,6 +4514,30 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
     ) {
       window.location.reload()
       return
+    }
+
+    /*
+      PHASE 6 - finish an interrupted conflict resolution, if (and only
+      if) one left a pending marker behind (see syncResolutionEngine.ts's
+      finishPendingResolution() for the exact conditions - the marker is
+      dropped, never forced, when any of them fails). With no marker this
+      is a single synchronous localStorage read and the line below runs
+      exactly as it always has. With one, the normal startup pull waits
+      for recovery to finish so it starts from the recovered state.
+    */
+    if (account && hasPendingResolutionMarker()) {
+
+      finishPendingResolution({ activeAccountId: account.homeAccountId })
+        .then(result => {
+          if (result.status === 'completed') {
+            notifyLocalDataReplaced()
+          }
+        })
+        .catch(() => {})
+        .finally(() => requestCloudPullIfSignedIn(true))
+
+      return
+
     }
 
     requestCloudPullIfSignedIn(Boolean(account))

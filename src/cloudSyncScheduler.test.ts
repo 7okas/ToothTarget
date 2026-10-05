@@ -34,6 +34,8 @@ import {
   subscribeLastSyncOutcome,
   getLocalDataVersion,
   subscribeLocalDataVersion,
+  notifyLocalDataReplaced,
+  reportResolutionApplied,
   __resetCloudSyncSchedulerForTests,
 } from './cloudSyncScheduler'
 
@@ -867,6 +869,42 @@ describe('localDataVersion (UI refresh signal)', () => {
     __resetCloudSyncSchedulerForTests()
 
     expect(getLocalDataVersion()).toBe(0)
+
+  })
+
+})
+
+describe('Phase 6 resolution hooks (not called by anything yet)', () => {
+
+  it('notifyLocalDataReplaced bumps the local data version and nothing else', () => {
+
+    const listener = vi.fn()
+    const unsubscribe = subscribeLocalDataVersion(listener)
+
+    notifyLocalDataReplaced()
+
+    expect(getLocalDataVersion()).toBe(1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(getLastSyncOutcome()).toBeNull()
+    expect(mockedMaybeRotateBackup).not.toHaveBeenCalled()
+    expect(mockedSyncCloudNow).not.toHaveBeenCalled()
+
+    unsubscribe()
+
+  })
+
+  it('reportResolutionApplied records a clean synced outcome, idle status, refreshes data, rotates the backup, and starts no sync', () => {
+
+    mockedMaybeRotateBackup.mockResolvedValue(undefined)
+
+    reportResolutionApplied()
+
+    expect(getLastSyncOutcome()).toEqual({ type: 'synced' })
+    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getLocalDataVersion()).toBe(1)
+    expect(mockedMaybeRotateBackup).toHaveBeenCalledTimes(1)
+    expect(mockedSyncCloudNow).not.toHaveBeenCalled()
+    expect(mockedPullCloudSnapshot).not.toHaveBeenCalled()
 
   })
 

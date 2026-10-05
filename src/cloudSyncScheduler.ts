@@ -324,6 +324,35 @@ export function subscribeLocalDataVersion(listener: () => void): () => void {
 
 }
 
+/*
+  PHASE 6 - RESOLUTION HOOKS (not called by anything yet)
+
+  notifyLocalDataReplaced() - tell React state that mirrors the synced
+  localStorage keys to re-read them, because something other than a
+  normal sync (a finished resolution, a startup recovery) just
+  replaced them. The same signal a successful sync already sends.
+
+  reportResolutionApplied() - a confirmed resolution just completed:
+  this device and OneDrive now match. Records a clean 'synced' outcome
+  and an idle status (so the badge stops showing "Sync paused"), asks
+  React to re-read local data, and fires the same fire-and-forget dated
+  backup rotation any successful sync fires. Never starts a sync.
+*/
+
+export function notifyLocalDataReplaced(): void {
+  bumpLocalDataVersion()
+}
+
+export function reportResolutionApplied(): void {
+
+  setLastSyncOutcome({ type: 'synced' })
+  setStatus('idle')
+  bumpLocalDataVersion()
+
+  maybeRotateBackup().catch(() => {})
+
+}
+
 function scheduleFlush(): void {
 
   if (microtaskQueued) {

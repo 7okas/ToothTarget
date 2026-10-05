@@ -195,7 +195,7 @@ const LOCAL_SYNC_ETAG_KEY = 'toothTargetCloudSyncETag'
 const LOCAL_CHANGE_COUNTER_KEY = 'toothTargetLocalChangeCounter'
 const LAST_SYNCED_CHANGE_COUNTER_KEY = 'toothTargetLastSyncedChangeCounter'
 
-function readLocalChangeCounter(): number {
+export function readLocalChangeCounter(): number {
 
   const raw = localStorage.getItem(LOCAL_CHANGE_COUNTER_KEY)
   const parsed = raw === null ? NaN : Number(raw)
@@ -286,7 +286,7 @@ function readLocalArray(key: string): unknown[] {
 
 }
 
-function readLocalSyncUpdatedAt(): string | null {
+export function readLocalSyncUpdatedAt(): string | null {
 
   const raw = localStorage.getItem(LOCAL_SYNC_UPDATED_AT_KEY)
 
@@ -353,7 +353,7 @@ function readPersistedNextPatientNumber(): number {
   merge commit.
 */
 
-function buildLocalCloudSyncDocument():
+export function buildLocalCloudSyncDocument():
   | { valid: true; document: CloudSyncDocument }
   | { valid: false; error: string } {
 
@@ -418,7 +418,7 @@ function buildLocalCloudSyncDocument():
   still needs to handle itself (this function has no opinion on what a
   successful read should do next).
 */
-function classifyCloudReadFailure(
+export function classifyCloudReadFailure(
   cloudRead: CloudSyncReadResult
 ): CloudSyncResult | null {
 
@@ -549,7 +549,7 @@ function recordSuccessfulPush(
   different" is the only thing this answers, exactly like the plain
   ETag comparison it's standing in for.
 */
-function hasCloudChangedSinceKnown(
+export function hasCloudChangedSinceKnown(
   cloudUpdatedAt: string,
   cloudETag: string
 ): boolean {
@@ -570,7 +570,36 @@ function hasCloudChangedSinceKnown(
 
 }
 
+/*
+  PHASE 6 - RESOLUTION IN PROGRESS GUARD
+
+  Set only by syncResolutionEngine.ts's applyResolution() for the
+  duration of one apply, so no background push/pull can run in the
+  middle of it. Always false otherwise - when false (every code path
+  that exists today) pushLocalSnapshot()/pullCloudSnapshot() behave
+  exactly as before. While set they stop at the same 'diverged' result
+  they already return for an unresolved disagreement, writing nothing.
+*/
+let resolutionApplying = false
+
+export function setResolutionApplying(value: boolean): void {
+  resolutionApplying = value
+}
+
+export function isResolutionApplying(): boolean {
+  return resolutionApplying
+}
+
+const RESOLUTION_IN_PROGRESS_RESULT: CloudSyncResult = {
+  status: 'diverged',
+  detail: 'A resolution is being applied right now. Nothing was written.',
+}
+
 export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
+
+  if (resolutionApplying) {
+    return RESOLUTION_IN_PROGRESS_RESULT
+  }
 
   /*
     Captured before this function's first await, synchronously - see
@@ -891,6 +920,10 @@ function adoptCloudSnapshotLocally(
 
 export async function pullCloudSnapshot(): Promise<CloudSyncResult> {
 
+  if (resolutionApplying) {
+    return RESOLUTION_IN_PROGRESS_RESULT
+  }
+
   const cloudRead = await readCloudSyncDocument()
 
   const readFailure = classifyCloudReadFailure(cloudRead)
@@ -1007,6 +1040,42 @@ export async function pullCloudSnapshot(): Promise<CloudSyncResult> {
       'since this device last synced. Neither side was overwritten.',
   }
 
+}
+
+/*
+  PHASE 6 - COMMIT HELPERS FOR A CONFIRMED RESOLUTION
+
+  Thin exported wrappers over the two existing, private routines that
+  already do exactly what a resolution needs, so syncResolutionEngine.ts
+  never has to know the storage keys:
+
+  commitResolvedSnapshotLocally() - this device now holds `document` as
+  its data AND matches the cloud version `eTag` (replaces the five
+  synced collections the same way a pull's adoption does, records the
+  known cloud version, the change counter, the next patient number and
+  the device's last-sync time).
+
+  recordCloudMatchesLocal() - the data is already the same on both
+  sides (an empty diff): nothing in the data is touched, only the
+  tracking (known cloud version, change counter, next patient number,
+  last-sync time) is advanced.
+*/
+export function commitResolvedSnapshotLocally(
+  document: CloudSyncDocument,
+  nowIso: string,
+  counterToRecord: number,
+  eTag: string | null
+): void {
+  adoptCloudSnapshotLocally(document, nowIso, counterToRecord, eTag)
+}
+
+export function recordCloudMatchesLocal(
+  document: CloudSyncDocument,
+  nowIso: string,
+  counterToRecord: number,
+  eTag: string | null
+): void {
+  recordSuccessfulPush(document, nowIso, counterToRecord, eTag)
 }
 
 /*
@@ -1253,7 +1322,7 @@ type AccountLocalCache = {
   lastSyncedChangeCounter: number | null
 }
 
-function readSyncedAccountId(): string | null {
+export function readSyncedAccountId(): string | null {
 
   const raw = localStorage.getItem(SYNCED_ACCOUNT_ID_KEY)
 

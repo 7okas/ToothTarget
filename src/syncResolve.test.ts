@@ -498,6 +498,9 @@ describe('patient-number collisions block the apply', () => {
 
     expect(renumbered.patientNumber).toBe(13)
     expect(renumbered.updatedAt).toBe(NOW)
+    expect(resolved.renumbered).toEqual([
+      { patientId: 'cld', name: 'Cloud Twelve', from: 12, to: 13 },
+    ])
 
     const kept = resolved.document!.patients.find(patient => patient.id === 'dev')!
 
