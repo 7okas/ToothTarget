@@ -151,11 +151,23 @@ export type Procedure = {
     molar: string
   }
   /*
+    Phase 2 (Sync & Statistics Redesign) addition - every procedure is
+    now a renamable/archivable "tag" with no built-in/custom
+    distinction (see confirmEditProcedure/confirmArchiveProcedure
+    below). Optional rather than required, and defaulting to 'active'
+    wherever it's read (see isProcedureActive() below), specifically
+    so an existing procedure record saved before this field existed -
+    local or already synced from the cloud - keeps loading and
+    validating exactly as before, with no backfill pass needed; it
+    only ever gets archived going forward, by explicit user action.
+  */
+  status?: 'active' | 'archived'
+  /*
     Phase 5.5 addition - added for the exact same reason
     ProcedureTemplate/Patient/SavedTreatment each gained one: a
     procedure record was "create-only/immutable" in every normal local
-    workflow until editing (confirmEditProcedure()) and deleting
-    (deleteProcedureFromRegistry()) a procedure became possible.
+    workflow until editing (confirmEditProcedure()) and archiving
+    (setProcedureArchiveStatusInRegistry()) a procedure became possible.
     Without a real timestamp, cloudMerge.ts's same-id merge would have
     no honest way to prefer an edit over a stale pre-edit copy still
     sitting in the cloud. Set at creation (addProcedure()), bumped on
@@ -236,9 +248,14 @@ export type Patient = {
   entityId (the UUID of the thing that was deleted) - deliberately
   carries no patient name or other descriptive content, since a merge
   only ever needs to answer "was this UUID deleted?". 'procedure'
-  (Phase 5.5) is recorded by deleteProcedureFromRegistry() below,
+  (Phase 5.5) was recorded by the old delete-a-custom-procedure flow,
   mirroring exactly how 'procedureTemplate' is recorded by
-  deleteTemplateFromRegistry().
+  deleteTemplateFromRegistry(). As of Phase 2 of the Sync &
+  Statistics Redesign, procedures are archived rather than deleted
+  (setProcedureArchiveStatusInRegistry() below) and no longer create
+  new 'procedure' tombstones - this entityType is kept only so any
+  tombstone already recorded by the old flow, on data synced before
+  this change, still reads and merges correctly (see cloudMerge.ts).
 */
 
 export type DeletionTombstone = {
@@ -541,16 +558,14 @@ const BUILTIN_TEMPLATES: ProcedureTemplate[] = (
 ).map(template => ({ ...template, updatedAt: BUILTIN_TEMPLATE_UPDATED_AT }))
 
 /*
-  Built-in procedures are static and never edited/deleted through the
-  normal edit/delete path (see confirmEditProcedure()/
-  requestDeleteProcedure()'s own isCustom guards below), so there's no
-  real "last edited" moment to record - one fixed timestamp is stamped
-  onto all of them purely to satisfy the shared Procedure type, the
-  exact same reasoning/pattern BUILTIN_TEMPLATE_UPDATED_AT already
-  established for BUILTIN_TEMPLATES. It's never read: built-ins are
-  never part of the cloud sync dataset (customProcedures only, see
-  cloudSync.ts) and are never included in a cloud backup either (see
-  createCloudBackup()'s isCustom filter).
+  Phase 2 (Sync & Statistics Redesign): built-ins are no longer immune
+  to editing - confirmEditProcedure() (below) now renames any
+  procedure, built-in or custom, since there's no longer a separate
+  "built-in procedure that cannot be touched" (deletion is still
+  isCustom-gated for now; that's Phase 2's next step). This fixed
+  seed timestamp is still stamped onto all of them purely to satisfy
+  the shared Procedure type at creation time - a genuine rename
+  bumps updatedAt to the real edit time, same as any other procedure.
 */
 const BUILTIN_PROCEDURE_UPDATED_AT = '2024-01-01T00:00:00.000Z'
 
@@ -2311,6 +2326,18 @@ function migrateProcedureTimestamps(
 
 }
 
+/*
+  A procedure/tag with no status field at all (every record that
+  existed before this field was introduced) is active, exactly as it
+  always implicitly was - only an explicit status: 'archived' hides
+  it from the new-treatment picker (see the procedureSelect screen
+  below). Nothing else ever reads Procedure.status directly, so this
+  is the one place that definition lives.
+*/
+function isProcedureActive(procedure: Procedure): boolean {
+  return procedure.status !== 'archived'
+}
+
 function readPersistedProcedures(): Procedure[] {
 
   try {
@@ -2964,86 +2991,120 @@ async function deleteTemplateFromRegistry(
 }
 
 /*
-  CROSS-TAB SAFE CUSTOM PROCEDURE DELETION (Phase 5.5)
+  CROSS-TAB SAFE PROCEDURE ARCHIVING (Phase 2, Sync & Statistics
+  Redesign - supersedes the old Phase 5.5 "delete a custom procedure"
+  flow below)
 
-  Mirrors CROSS-TAB SAFE CUSTOM TEMPLATE DELETION immediately above,
-  under its own lock name, for the identical reason a dedicated
-  template-deletion lock exists rather than reusing the patient one.
-  Only ever removes a procedure that is BOTH found in the current
-  persisted list AND isCustom === true - a built-in procedure (or a
-  procedure that's somehow already gone) is left completely untouched,
-  and no tombstone is created for it either, matching the UI (no
-  delete button is ever shown for a built-in procedure - see the
-  procedureSelect screen below).
+  Under the tag model there is no longer a built-in/custom split and
+  no destructive delete - every procedure (tag), including a former
+  built-in, can be archived, and archiving only ever sets status:
+  'archived' + bumps updatedAt on the EXISTING record. Nothing is
+  removed from toothTargetProcedures and no tombstone is written, so:
+  - an archived tag is simply filtered out of the "start a new
+    treatment" picker (see isProcedureActive() below / the
+    procedureSelect screen), while remaining fully intact for Edit,
+    Unarchive, and for resolving the name/phase-set of any past
+    treatment that still points at it.
+  - a sync/merge between two devices treats an archive exactly like
+    any other field edit (same id, newer updatedAt wins) - no special
+    tombstone-suppression logic is needed for it going forward. Old
+    'procedure' tombstones already recorded by the previous
+    delete-based flow (on data synced before this change) are still
+    read and honored during merge (see cloudMerge.ts) - this flow
+    just never creates new ones.
 
-  CRITICAL: this only ever removes the Procedure record itself from
-  toothTargetProcedures and records a tombstone for that UUID - it
-  never reads, filters, or writes toothTargetSavedTreatments in any
-  way. A past treatment's procedureName/procedureId is a snapshot taken
-  once, at the moment the treatment was started (see startTreatment()
-  below), never re-resolved against the live procedures list, so
-  deleting a procedure can never change what an already-completed
-  treatment shows - it only removes that procedure from the list
-  offered when starting a NEW treatment (procedureSelect maps over
-  `procedures`, which this function's caller updates via setProcedures()
-  after a successful delete).
+  Re-reads the registry fresh under the same cross-tab lock the old
+  delete flow used, for the identical "don't lose a concurrent tab's
+  own change" reason - archiving, like the old delete, mutates a
+  shared list rather than a single record passed in by the caller.
+
+  CRITICAL: this only ever updates the Procedure record's own status/
+  updatedAt fields - it never reads, filters, or writes
+  toothTargetSavedTreatments in any way. A past treatment's
+  procedureName/procedureId is a snapshot taken once, at the moment
+  the treatment was started (see startTreatment() below), never
+  re-resolved against the live procedures list, so archiving a
+  procedure can never change what an already-completed treatment
+  shows.
 */
 
-const PROCEDURE_DELETION_LOCK_NAME = 'toothtarget-procedure-deletion'
+const PROCEDURE_ARCHIVE_LOCK_NAME = 'toothtarget-procedure-deletion'
 
-type ProcedureDeletionResult = {
+type ProcedureArchiveResult = {
   procedures: Procedure[]
-  tombstones: DeletionTombstone[]
   /*
-    True only when a custom procedure was actually removed (and its
-    tombstone recorded) - false for the "not found / not custom"
-    no-op case. Lets confirmDeleteProcedure() below request a cloud
-    sync only when the synchronized state genuinely changed.
+    True only when a procedure's status genuinely changed (the no-op
+    "not found / already in that state" case returns false). Lets
+    confirmArchiveProcedure()/confirmUnarchiveProcedure() below
+    request a cloud sync only when the synchronized state genuinely
+    changed.
   */
-  deleted: boolean
+  changed: boolean
 }
 
-function removeProcedureFromCurrentList(
-  procedureId: string
-): ProcedureDeletionResult {
+function setProcedureArchiveStatus(
+  procedureId: string,
+  archived: boolean
+): ProcedureArchiveResult {
 
-  const currentProcedures = readPersistedProcedures()
+  const persistedProcedures = readPersistedProcedures()
 
-  const procedureToDelete =
+  /*
+    A fresh install (or one that has never added/edited/archived a
+    procedure before) has nothing in toothTargetProcedures yet - the
+    live registry is still just the built-in seed list held in React
+    state. Falling back to it here means archiving a never-before-
+    persisted built-in on its very first use still finds the record,
+    instead of silently no-op'ing against an empty persisted list.
+  */
+  const currentProcedures =
+    persistedProcedures.length > 0
+      ? persistedProcedures
+      : BUILTIN_PROCEDURES
+
+  const existingProcedure =
     currentProcedures.find(procedure => procedure.id === procedureId)
 
-  if (!procedureToDelete || procedureToDelete.isCustom !== true) {
+  const alreadyAtTargetState =
+    !existingProcedure ||
+    isProcedureActive(existingProcedure) === !archived
+
+  if (alreadyAtTargetState) {
 
     return {
       procedures: currentProcedures,
-      tombstones: readPersistedTombstones(),
-      deleted: false,
+      changed: false,
     }
 
   }
 
   const updatedProcedures =
-    currentProcedures.filter(procedure => procedure.id !== procedureId)
+    currentProcedures.map(procedure =>
+      procedure.id === procedureId
+        ? {
+            ...procedure,
+            status: archived ? 'archived' as const : 'active' as const,
+            updatedAt: new Date().toISOString(),
+          }
+        : procedure
+    )
 
   localStorage.setItem(
     'toothTargetProcedures',
     JSON.stringify(updatedProcedures)
   )
 
-  const updatedTombstones =
-    appendTombstone('procedure', procedureId)
-
   return {
     procedures: updatedProcedures,
-    tombstones: updatedTombstones,
-    deleted: true,
+    changed: true,
   }
 
 }
 
-async function deleteProcedureFromRegistry(
-  procedureId: string
-): Promise<ProcedureDeletionResult> {
+async function setProcedureArchiveStatusInRegistry(
+  procedureId: string,
+  archived: boolean
+): Promise<ProcedureArchiveResult> {
 
   if (
     typeof navigator !== 'undefined' &&
@@ -3052,13 +3113,13 @@ async function deleteProcedureFromRegistry(
   ) {
 
     return navigator.locks.request(
-      PROCEDURE_DELETION_LOCK_NAME,
-      () => removeProcedureFromCurrentList(procedureId)
+      PROCEDURE_ARCHIVE_LOCK_NAME,
+      () => setProcedureArchiveStatus(procedureId, archived)
     )
 
   }
 
-  return removeProcedureFromCurrentList(procedureId)
+  return setProcedureArchiveStatus(procedureId, archived)
 
 }
 
@@ -3245,12 +3306,15 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
     useState('')
 
   /*
-    EDIT / DELETE PROCEDURE (Phase 5.5)
+    EDIT / ARCHIVE PROCEDURE (Phase 5.5, archiving reworked in Phase 2
+    of the Sync & Statistics Redesign)
 
     Same shape as the template row's own edit/delete UI state -
     editProcedureId doubles as "is the edit modal open" (null means
-    closed), deleteProcedureConfirmId likewise for the delete-confirm
-    modal, both mirroring deleteTemplateConfirmId below.
+    closed), archiveProcedureConfirmId likewise for the archive-
+    confirm modal, both mirroring deleteTemplateConfirmId below.
+    showArchivedProcedures toggles whether the (collapsed by default)
+    archived-tags section is visible on the procedureSelect screen.
   */
 
   const [editProcedureId, setEditProcedureId] =
@@ -3262,8 +3326,11 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
   const [editProcedureError, setEditProcedureError] =
     useState<string | null>(null)
 
-  const [deleteProcedureConfirmId, setDeleteProcedureConfirmId] =
+  const [archiveProcedureConfirmId, setArchiveProcedureConfirmId] =
     useState<string | null>(null)
+
+  const [showArchivedProcedures, setShowArchivedProcedures] =
+    useState(false)
 
   const [showDeleteConfirm, setShowDeleteConfirm] =
     useState(false)
@@ -4847,7 +4914,9 @@ async function openPatient(
 
     setEditProcedureError(null)
 
-    setDeleteProcedureConfirmId(null)
+    setArchiveProcedureConfirmId(null)
+
+    setShowArchivedProcedures(false)
 
     setScreen('procedureSelect')
 
@@ -4945,7 +5014,7 @@ async function openPatient(
     already does for templates - it reads/writes the in-memory
     `procedures` state directly rather than re-reading fresh from
     localStorage under a lock; the only locked procedure operation is
-    deletion (deleteProcedureFromRegistry() above), for the identical
+    archiving (setProcedureArchiveStatusInRegistry() above), for the identical
     reason template deletion alone is locked (removing an entry from a
     shared list is the one operation genuinely at risk of a lost update
     between tabs - editing a single record's own field in place is
@@ -5038,55 +5107,80 @@ async function openPatient(
 
 
   /*
-    DELETE PROCEDURE (Phase 5.5)
+    ARCHIVE PROCEDURE (Phase 2, Sync & Statistics Redesign -
+    supersedes the old Phase 5.5 "delete" flow)
 
     Two-step, explicit-confirmation flow, matching the app's existing
-    "confirm before delete" pattern (requestDeleteTemplate()/
-    confirmDeleteTemplate(), requestDeletePatient()/confirmDeletePatient()).
-    deleteProcedureFromRegistry() re-reads the registry fresh under the
-    cross-tab deletion lock - see that function's own header comment
-    for why this, unlike editing, needs to be locked and re-read fresh.
+    "confirm before a destructive-feeling action" pattern
+    (requestDeleteTemplate()/confirmDeleteTemplate(),
+    requestDeletePatient()/confirmDeletePatient()) - even though
+    archiving isn't actually destructive (see Unarchive below), it
+    still removes a tag from the new-treatment picker, which is worth
+    a confirmation. setProcedureArchiveStatusInRegistry() re-reads the
+    registry fresh under the cross-tab lock - see that function's own
+    header comment for why.
   */
 
-  function requestDeleteProcedure(procedureId: string) {
-    setDeleteProcedureConfirmId(procedureId)
+  function requestArchiveProcedure(procedureId: string) {
+    setArchiveProcedureConfirmId(procedureId)
   }
 
-  function cancelDeleteProcedure() {
-    setDeleteProcedureConfirmId(null)
+  function cancelArchiveProcedure() {
+    setArchiveProcedureConfirmId(null)
   }
 
-  async function confirmDeleteProcedure() {
+  async function confirmArchiveProcedure() {
 
-    if (!deleteProcedureConfirmId) {
+    if (!archiveProcedureConfirmId) {
       return
     }
 
     const registryResult =
-      await deleteProcedureFromRegistry(deleteProcedureConfirmId)
+      await setProcedureArchiveStatusInRegistry(archiveProcedureConfirmId, true)
 
     setProcedures(registryResult.procedures)
 
     /*
-      Only requested when a custom procedure was genuinely removed -
-      skipped for the no-op "already gone / somehow not custom" case,
+      Only requested when the procedure's status genuinely changed -
+      skipped for the no-op "already archived / not found" case,
       exactly mirroring confirmDeleteTemplate()'s own guard.
     */
-    if (registryResult.deleted) {
+    if (registryResult.changed) {
       requestCloudSync()
     }
 
     /*
-      If the just-deleted procedure was the one currently selected
+      If the just-archived procedure was the one currently selected
       (eg. reached via a stale reference from a previous render), clear
       it so a subsequent screen never tries to start a treatment
-      against a procedure that no longer exists.
+      against a procedure no longer offered.
     */
-    if (selectedProcedure?.id === deleteProcedureConfirmId) {
+    if (selectedProcedure?.id === archiveProcedureConfirmId) {
       setSelectedProcedure(null)
     }
 
-    setDeleteProcedureConfirmId(null)
+    setArchiveProcedureConfirmId(null)
+
+  }
+
+  /*
+    UNARCHIVE PROCEDURE
+
+    The reverse of the above - a single-click action (no confirmation
+    modal), since restoring a tag to the active picker list isn't a
+    destructive or hard-to-reverse choice the way archiving is.
+  */
+
+  async function unarchiveProcedure(procedureId: string) {
+
+    const registryResult =
+      await setProcedureArchiveStatusInRegistry(procedureId, false)
+
+    setProcedures(registryResult.procedures)
+
+    if (registryResult.changed) {
+      requestCloudSync()
+    }
 
   }
 
@@ -8792,7 +8886,7 @@ const patientTreatments =
 
           <div className="template-list">
 
-            {procedures.map(
+            {procedures.filter(isProcedureActive).map(
               procedure => (
 
                 <div className="template-row" key={procedure.id}>
@@ -8808,43 +8902,34 @@ const patientTreatments =
                       <span className="template-row-name">
                         {procedure.name}
                       </span>
-                      {!procedure.isCustom && (
-                        <span className="template-badge">
-                          Built-in
-                        </span>
-                      )}
                     </span>
                   </button>
 
-                  {procedure.isCustom && (
+                  <div className="template-row-actions">
 
-                    <div className="template-row-actions">
+                    <button
+                      type="button"
+                      className="small-button"
+                      title="Rename this procedure"
+                      onClick={() =>
+                        requestEditProcedure(procedure)
+                      }
+                    >
+                      ✎
+                    </button>
 
-                      <button
-                        type="button"
-                        className="small-button"
-                        title="Edit this procedure"
-                        onClick={() =>
-                          requestEditProcedure(procedure)
-                        }
-                      >
-                        ✎
-                      </button>
+                    <button
+                      type="button"
+                      className="small-button"
+                      title="Archive this procedure"
+                      onClick={() =>
+                        requestArchiveProcedure(procedure.id)
+                      }
+                    >
+                      ×
+                    </button>
 
-                      <button
-                        type="button"
-                        className="small-button"
-                        title="Delete this procedure"
-                        onClick={() =>
-                          requestDeleteProcedure(procedure.id)
-                        }
-                      >
-                        ×
-                      </button>
-
-                    </div>
-
-                  )}
+                  </div>
 
                 </div>
 
@@ -8869,7 +8954,78 @@ const patientTreatments =
 
             )}
 
+            {procedures.some(procedure => !isProcedureActive(procedure)) && (
+
+              <button
+                type="button"
+                className="patient-list-item"
+                onClick={() =>
+                  setShowArchivedProcedures(!showArchivedProcedures)
+                }
+              >
+                {showArchivedProcedures
+                  ? 'Hide Archived Procedures'
+                  : 'Show Archived Procedures'}
+              </button>
+
+            )}
+
           </div>
+
+          {showArchivedProcedures && (
+
+            <div className="template-list">
+
+              {procedures.filter(procedure => !isProcedureActive(procedure)).map(
+                procedure => (
+
+                  <div className="template-row" key={procedure.id}>
+
+                    <span className="template-row-main">
+                      <span className="template-row-title">
+                        <span className="template-row-name">
+                          {procedure.name}
+                        </span>
+                        <span className="template-badge">
+                          Archived
+                        </span>
+                      </span>
+                    </span>
+
+                    <div className="template-row-actions">
+
+                      <button
+                        type="button"
+                        className="small-button"
+                        title="Rename this procedure"
+                        onClick={() =>
+                          requestEditProcedure(procedure)
+                        }
+                      >
+                        ✎
+                      </button>
+
+                      <button
+                        type="button"
+                        className="small-button"
+                        title="Unarchive this procedure"
+                        onClick={() =>
+                          unarchiveProcedure(procedure.id)
+                        }
+                      >
+                        ↺
+                      </button>
+
+                    </div>
+
+                  </div>
+
+                )
+              )}
+
+            </div>
+
+          )}
 
           {showAddProcedure && (
 
@@ -8959,28 +9115,29 @@ const patientTreatments =
         )}
 
 
-        {deleteProcedureConfirmId && (
+        {archiveProcedureConfirmId && (
 
           <div className="modal-overlay">
 
             <div className="modal-card">
 
               <h2>
-                Delete this procedure?
+                Archive this procedure?
               </h2>
 
               <p>
                 This removes only this procedure from the list offered
                 when starting new treatments. Past treatments that
                 already used it are not affected and keep displaying
-                exactly as before. This action cannot be undone.
+                exactly as before. You can unarchive it again at any
+                time from "Show Archived Procedures".
               </p>
 
               <div className="modal-actions">
 
                 <button
                   type="button"
-                  onClick={cancelDeleteProcedure}
+                  onClick={cancelArchiveProcedure}
                 >
                   Cancel
                 </button>
@@ -8988,9 +9145,9 @@ const patientTreatments =
                 <button
                   type="button"
                   className="button-danger"
-                  onClick={confirmDeleteProcedure}
+                  onClick={confirmArchiveProcedure}
                 >
-                  Delete
+                  Archive
                 </button>
 
               </div>

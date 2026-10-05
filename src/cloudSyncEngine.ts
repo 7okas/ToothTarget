@@ -71,14 +71,19 @@ import {
   cloud-synchronized set):
     toothTargetPatients, toothTargetSavedTreatments,
     toothTargetTemplates (custom entries only),
-    toothTargetProcedures (custom entries only),
+    toothTargetProcedures (Phase 2, Sync & Statistics Redesign: EVERY
+    entry, not just isCustom ones - every procedure is now a
+    renamable/archivable tag, including former "built-ins", and a
+    rename/archive on one device must reach every other device),
     toothTargetDeletionTombstones
 
   Local-only (never read, written, or referenced by this file):
     toothTargetActiveTreatment, toothTargetIncompleteTreatments,
     toothTargetNextPatientNumber (see below - reconciled locally, but
     never taken FROM the cloud document, which doesn't carry it),
-    built-in templates/procedures, MSAL state, transient UI state.
+    built-in templates (templates are unaffected by Phase 2 - still
+    isCustom-only, see TEMPLATES_KEY handling below), MSAL state,
+    transient UI state.
 
   ============================================================
   CRASH-SAFETY ANALYSIS (see report for the full writeup)
@@ -191,16 +196,20 @@ function readPersistedNextPatientNumber(): number {
 /*
   LOCAL DOCUMENT CONSTRUCTION
 
-  Reads exactly the five synchronized keys, filters templates/
-  procedures down to isCustom === true (mirroring
-  createCloudBackup()'s own filter in cloudBackup.ts), and runs the
-  result through validateCloudSyncDocument() before returning it -
-  this module never uploads or merges data it hasn't first confirmed
-  is a structurally valid v2 document. If local data is somehow not
-  yet in the current (migrated) shape - this module does not itself
-  run migrations, see this file's header comment - validation fails
-  here and syncCloudNow() reports 'validation-failed' rather than
-  guessing or repairing anything.
+  Reads exactly the five synchronized keys and runs the result
+  through validateCloudSyncDocument() before returning it - this
+  module never uploads or merges data it hasn't first confirmed is a
+  structurally valid v2 document. If local data is somehow not yet in
+  the current (migrated) shape - this module does not itself run
+  migrations, see this file's header comment - validation fails here
+  and syncCloudNow() reports 'validation-failed' rather than guessing
+  or repairing anything.
+
+  Templates are still filtered down to isCustom === true (mirroring
+  createCloudBackup()'s own filter in cloudBackup.ts) - unaffected by
+  Phase 2. Procedures are NOT filtered any more: every procedure/tag,
+  built-in or not, is uploaded as-is, so a rename/archive on a former
+  "built-in" propagates to other devices exactly like any other edit.
 
   updatedAt: readLocalSyncUpdatedAt() ?? "now" - the ONLY time "now" is
   used is when no local sync timestamp has ever been recorded (this
@@ -230,9 +239,7 @@ function buildLocalCloudSyncDocument():
     customTemplates: templates.filter(
       template => template.isCustom === true
     ),
-    customProcedures: procedures.filter(
-      procedure => procedure.isCustom === true
-    ),
+    customProcedures: procedures,
     deletionTombstones,
   }
 
@@ -275,11 +282,31 @@ function emptyCloudSyncDocument(localUpdatedAt: string): CloudSyncDocument {
   header comment for why the non-atomicity of these separate
   localStorage.setItem() calls is safe under this app's merge model.
 
-  Built-in templates/procedures are preserved by reading whatever is
-  CURRENTLY persisted and keeping only its isCustom === false entries
-  - the exact same pattern cloudBackup.ts's applyCloudRestore() already
-  uses for the same reason (built-ins are never part of the cloud
-  document and must never be replaced or duplicated by this write).
+  Built-in TEMPLATES are preserved by reading whatever is CURRENTLY
+  persisted and keeping only its isCustom === false entries - the
+  exact same pattern cloudBackup.ts's applyCloudRestore() already
+  uses for the same reason (built-in templates are never part of the
+  cloud document and must never be replaced or duplicated by this
+  write). This does NOT apply to PROCEDURES any more (Phase 2, Sync &
+  Statistics Redesign) - every procedure, including a former
+  "built-in", is now part of the cloud document, so
+  mergedDocument.customProcedures is written as-is, exactly like
+  patients/savedTreatments above, with no built-in-preserving split
+  and - deliberately - no "skip if empty" guard: an empty result here
+  can be the entirely legitimate outcome of an old-style 'procedure'
+  tombstone (recorded by the pre-Phase-2 delete flow) finally
+  suppressing a stale custom procedure a device still had locally
+  (see cloudSync.integration.test.ts's own "offline resurrection
+  prevention" coverage) - skipping that write would let the deleted
+  record keep reappearing locally forever. A virgin device's very
+  first sync legitimately producing an empty result here is not a
+  new risk this introduces: buildLocalCloudSyncDocument() already
+  read an empty local array in that same case before Phase 2 (nothing
+  persisted yet to filter down to isCustom === true either), so this
+  write was already "[]" in that scenario beforehand too - App.tsx's
+  own mount-time load effect already treats an empty persisted
+  procedures array as "fall back to the built-in default list," so
+  nothing here is newly lossy.
 */
 
 function commitLocalState(
@@ -307,14 +334,9 @@ function commitLocalState(
     JSON.stringify([...builtInTemplates, ...mergedDocument.customTemplates])
   )
 
-  const currentProcedures = readLocalArray(PROCEDURES_KEY) as Procedure[]
-
-  const builtInProcedures =
-    currentProcedures.filter(procedure => procedure.isCustom === false)
-
   localStorage.setItem(
     PROCEDURES_KEY,
-    JSON.stringify([...builtInProcedures, ...mergedDocument.customProcedures])
+    JSON.stringify(mergedDocument.customProcedures)
   )
 
   localStorage.setItem(
@@ -861,7 +883,6 @@ function readSyncedAccountId(): string | null {
 function captureCurrentAccountState(): AccountLocalCache {
 
   const currentTemplates = readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[]
-  const currentProcedures = readLocalArray(PROCEDURES_KEY) as Procedure[]
 
   return {
     patients: readLocalArray(PATIENTS_KEY),
@@ -869,9 +890,16 @@ function captureCurrentAccountState(): AccountLocalCache {
     customTemplates: currentTemplates.filter(
       template => template.isCustom === true
     ),
-    customProcedures: currentProcedures.filter(
-      procedure => procedure.isCustom === true
-    ),
+    /*
+      Not filtered by isCustom any more (Phase 2, Sync & Statistics
+      Redesign) - matching buildLocalCloudSyncDocument()'s own change
+      above, every procedure (including a former "built-in") is
+      account-specific synced state now, so switching accounts must
+      carry a rename/archive made under one account along with it,
+      exactly like it already does for that account's custom
+      templates/patients/treatments.
+    */
+    customProcedures: readLocalArray(PROCEDURES_KEY) as Procedure[],
     deletionTombstones: readLocalArray(TOMBSTONES_KEY),
     nextPatientNumber: readPersistedNextPatientNumber(),
     cloudSyncUpdatedAt: readLocalSyncUpdatedAt(),
@@ -951,20 +979,31 @@ function readAccountCache(accountId: string): AccountLocalCache | null {
   keys) reflect `cache` - or, when `cache` is null (this device has
   never seen the incoming account before), reflect a clean, empty
   default - exactly like today's first-time-device behavior. Built-in
-  templates/procedures are preserved either way, read fresh from
-  whatever is CURRENTLY persisted, the same pattern commitLocalState()
-  already uses for the same reason (built-ins are never account-
+  TEMPLATES are preserved either way, read fresh from whatever is
+  CURRENTLY persisted, the same pattern commitLocalState() already
+  uses for the same reason (built-in templates are never account-
   specific and must never be replaced or duplicated by this).
+
+  PROCEDURES are written as a full, unconditional replace instead
+  (Phase 2, Sync & Statistics Redesign) - unlike commitLocalState()'s
+  own "skip the write if empty" guard, this one must NOT skip when
+  cache?.customProcedures is empty: isolating each account's own data
+  is this function's entire purpose, so a brand-new/never-seen
+  account (cache === null) switching in must never keep showing the
+  PREVIOUS account's renamed/archived procedures just because its own
+  cache has none yet. This is safe specifically because the caller
+  always reloads the page right after (see this function's call site)
+  - App.tsx's own mount-time load effect falls back to the built-in
+  default procedure list whenever toothTargetProcedures comes back
+  empty, so the brief "empty in storage" moment this can produce is
+  never actually read by live React state the way commitLocalState()'s
+  own (reload-free) background-sync path could.
 */
 function applyAccountCacheToLocalStorage(cache: AccountLocalCache | null): void {
 
   const builtInTemplates =
     (readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[])
       .filter(template => template.isCustom === false)
-
-  const builtInProcedures =
-    (readLocalArray(PROCEDURES_KEY) as Procedure[])
-      .filter(procedure => procedure.isCustom === false)
 
   localStorage.setItem(PATIENTS_KEY, JSON.stringify(cache?.patients ?? []))
 
@@ -980,7 +1019,7 @@ function applyAccountCacheToLocalStorage(cache: AccountLocalCache | null): void 
 
   localStorage.setItem(
     PROCEDURES_KEY,
-    JSON.stringify([...builtInProcedures, ...(cache?.customProcedures ?? [])])
+    JSON.stringify(cache?.customProcedures ?? [])
   )
 
   localStorage.setItem(

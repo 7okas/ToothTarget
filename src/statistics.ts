@@ -580,6 +580,54 @@ export function calculateProcedureStatistics(
 
 
 /*
+  PROCEDURE FILTER OPTIONS
+
+  calculateProcedureStatistics() above (and everything else in this
+  file) deliberately keeps grouping by procedureId, so a plain rename
+  doesn't retroactively merge history it shouldn't. But deleting a
+  procedure and recreating one with the same name mints a brand-new,
+  unrelated id (see Procedure/SavedTreatment in App.tsx) - from the
+  dentist's point of view that's still "the same procedure," so the
+  FILTER PICKER specifically merges options by name (case/whitespace
+  insensitive) and remembers every id that has ever shared that name,
+  so selecting it includes treatments from all of them.
+*/
+
+export type ProcedureFilterOption = {
+  procedureName: string
+  procedureIds: string[]
+  treatmentCount: number
+}
+
+export function calculateProcedureFilterOptions(
+  treatments: SavedTreatment[]
+): ProcedureFilterOption[] {
+
+  const groups = new Map<string, ProcedureFilterOption>()
+
+  calculateProcedureStatistics(treatments).forEach(stat => {
+
+    const displayName = stat.procedureName.trim()
+    const key = displayName.toLowerCase()
+
+    const group =
+      groups.get(key) ??
+      { procedureName: displayName, procedureIds: [], treatmentCount: 0 }
+
+    group.procedureIds.push(stat.procedureId)
+    group.treatmentCount += stat.treatmentCount
+
+    groups.set(key, group)
+
+  })
+
+  return Array.from(groups.values())
+    .sort((a, b) => b.treatmentCount - a.treatmentCount)
+
+}
+
+
+/*
   OVERTIME STATISTICS
 */
 

@@ -36,10 +36,11 @@ import type { CloudSyncDocument } from './cloudSync'
   (Phase 2), SavedTreatment (Phase 4.6, once editing a completed
   treatment's phase data became possible - see App.tsx's
   confirmEditTreatmentPhases()), and Procedure (Phase 5.5, once
-  editing/deleting a procedure became possible - see App.tsx's
-  confirmEditProcedure()/deleteProcedureFromRegistry()) - carries a real
-  updatedAt, so genuine last-write-wins applies to all four via
-  pickWinningByUpdatedAt() below.
+  editing/deleting a procedure became possible, reworked in Phase 2 of
+  the Sync & Statistics Redesign into editing/archiving - see App.tsx's
+  confirmEditProcedure()/setProcedureArchiveStatusInRegistry()) -
+  carries a real updatedAt, so genuine last-write-wins applies to all
+  four via pickWinningByUpdatedAt() below.
 
   resolveTie() below only ever runs as pickWinningByUpdatedAt()'s
   equal-updatedAt fallback now - a deterministic, content-based
@@ -574,24 +575,36 @@ export function mergeCloudSyncDocuments(
     CUSTOM PROCEDURES (Phase 5.5) - union by id with latest-updatedAt-
     wins, then tombstones win regardless of side (section 9), same as
     patients/templates now that Procedure carries a real updatedAt and
-    the 'procedure' tombstone entityType exists (see App.tsx's
-    confirmEditProcedure()/deleteProcedureFromRegistry()). A dangling
+    the 'procedure' tombstone entityType exists. A dangling
     templateId/regionTemplateIds reference into a tombstoned template is
     still left exactly as-is, matching the existing app's own tolerance
     for dangling template references - suppression here is purely by
     the procedure's OWN id, never by anything it references.
 
-    Critically, deleting a procedure ONLY ever removes/tombstones the
-    Procedure record itself - it never touches savedTreatments. A past
-    SavedTreatment already carries its own denormalized procedureName/
-    procedureId snapshot (set once, at the moment the treatment was
-    started - see App.tsx's startTreatment()) and is never re-resolved
-    against the live customProcedures list, so a treatment that used a
-    since-deleted procedure keeps displaying exactly as it always did,
-    on every device, forever. This merge engine has no code path that
-    could even do otherwise: survivingSavedTreatments above is filtered
-    only by tombstonedPatientIds/tombstonedTreatmentIds, never by
-    anything procedure-related.
+    As of Phase 2 of the Sync & Statistics Redesign, procedures are
+    archived rather than deleted (App.tsx's
+    setProcedureArchiveStatusInRegistry()) and this array now carries
+    EVERY procedure, including a former "built-in", not just
+    isCustom ones - archiving is just an ordinary field update
+    (status + updatedAt), so it needs no special handling here beyond
+    the last-write-wins union already in place. The 'procedure'
+    tombstone entityType - and this filter - are kept only so a
+    tombstone already recorded by the OLD delete flow, on data synced
+    before this change, still suppresses that record's resurrection;
+    no new code path creates one.
+
+    Critically, archiving (and, previously, deleting) a procedure
+    ONLY ever updates/tombstones the Procedure record itself - it
+    never touches savedTreatments. A past SavedTreatment already
+    carries its own denormalized procedureName/procedureId snapshot
+    (set once, at the moment the treatment was started - see
+    App.tsx's startTreatment()) and is never re-resolved against the
+    live customProcedures list, so a treatment that used a since-
+    archived/deleted procedure keeps displaying exactly as it always
+    did, on every device, forever. This merge engine has no code path
+    that could even do otherwise: survivingSavedTreatments above is
+    filtered only by tombstonedPatientIds/tombstonedTreatmentIds,
+    never by anything procedure-related.
   */
 
   const unionedProcedures = unionById(

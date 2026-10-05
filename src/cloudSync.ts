@@ -177,27 +177,52 @@ function isValidSyncTemplate(value: unknown): value is ProcedureTemplate {
 /*
   updatedAt is required here (Phase 5.5, added once editing/deleting a
   procedure became possible - see App.tsx's confirmEditProcedure()/
-  deleteProcedureFromRegistry()), for the identical reason
+  the old deleteProcedureFromRegistry()), for the identical reason
   SavedTreatment gained one in Phase 4.6: cloudMerge.ts's same-id
   procedure merge needs a real timestamp to prefer an edit over a stale
   pre-edit copy, exactly like it already does for
   patients/templates/treatments. This only checks the field is a real,
   non-empty timestamp string - never compares it to anything; that
   comparison is the merge engine's job, not this validator's.
+
+  Phase 2 (Sync & Statistics Redesign) relaxations:
+  - isCustom is no longer required to be true. Every procedure/tag,
+    including a former "built-in" (isCustom: false), is now part of
+    the synchronized set, since any of them can be renamed/archived
+    and that change must propagate across devices - see
+    cloudSyncEngine.ts's buildLocalCloudSyncDocument(), which used to
+    filter this array down to isCustom === true before uploading and
+    no longer does. Only the field's TYPE is checked now, matching
+    every other boolean/string field here - this validator has never
+    decided what a value MEANS, only whether the document is
+    structurally well-formed.
+  - status is optional and, when present, must be 'active' or
+    'archived'. Optional (rather than required) specifically so an
+    older cloud document written before this field existed - local or
+    already synced from the cloud - still validates exactly as
+    before; App.tsx's isProcedureActive() treats a missing status as
+    'active', the same default this validator implicitly allows.
 */
 
 function isValidSyncProcedure(value: unknown): value is Procedure {
 
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+
   return (
-    !!value &&
-    typeof value === 'object' &&
-    typeof (value as Procedure).id === 'string' &&
-    (value as Procedure).id.trim() !== '' &&
-    typeof (value as Procedure).name === 'string' &&
-    typeof (value as Procedure).templateId === 'string' &&
-    (value as Procedure).isCustom === true &&
-    typeof (value as Procedure).updatedAt === 'string' &&
-    (value as Procedure).updatedAt.trim() !== ''
+    typeof candidate.id === 'string' &&
+    candidate.id.trim() !== '' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.templateId === 'string' &&
+    typeof candidate.isCustom === 'boolean' &&
+    typeof candidate.updatedAt === 'string' &&
+    (candidate.updatedAt as string).trim() !== '' &&
+    (candidate.status === undefined ||
+      candidate.status === 'active' ||
+      candidate.status === 'archived')
   )
 
 }

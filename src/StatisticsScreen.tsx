@@ -14,6 +14,7 @@ import {
   calculateTreatmentStatistics,
   calculatePhaseStatistics,
   calculateProcedureStatistics,
+  calculateProcedureFilterOptions,
   calculateOvertimeStatistics,
   calculateRctRegionStatistics,
   calculateTimeTrend,
@@ -21,6 +22,7 @@ import {
   generatePersonalizedInsights,
   type StatisticsFilters,
   type DateRangePresetId,
+  type ProcedureFilterOption,
 } from './statistics'
 
 const MIN_SAMPLE_SIZE = 3
@@ -39,6 +41,20 @@ function toggleId(list: string[], id: string): string[] {
 }
 
 /*
+  Toggles a whole merged procedure-filter option (every id that has
+  ever shared its name) as one atomic unit, so selecting "RCT" always
+  selects/deselects all of its ids together rather than letting the
+  selection get split across a button click.
+*/
+
+function toggleIds(list: string[], ids: string[]): string[] {
+  const allSelected = ids.every(id => list.includes(id))
+  return allSelected
+    ? list.filter(id => !ids.includes(id))
+    : [...list, ...ids.filter(id => !list.includes(id))]
+}
+
+/*
   Plain-language summary of a filter selection, e.g. "All Molars —
   RCT" or "UR6 + UL6 — RCT" or "All Treatments". Shared by the main
   filter panel's "Comparing: X" line and both sides of the optional
@@ -50,7 +66,7 @@ function describeSelection(
   toothGroups: ToothGroup[],
   toothIds: string[],
   templateIds: string[],
-  procedures: Procedure[],
+  procedureOptions: ProcedureFilterOption[],
   templates: ProcedureTemplate[]
 ): string {
 
@@ -61,12 +77,21 @@ function describeSelection(
     ),
   ]
 
+  /*
+    Looks up each selected id's merged option rather than the live
+    procedures list, so a deleted-and-recreated procedure's old id
+    (no longer in `procedures`) still resolves to its name instead of
+    falling back to the raw id - and selecting a merged option (which
+    adds every id sharing that name at once) describes as that one
+    name, not duplicated once per id.
+  */
+
   const procedureParts =
-    procedureIds.map(
-      procedureId =>
-        procedures.find(procedure => procedure.id === procedureId)
-          ?.name ?? procedureId
-    )
+    procedureOptions
+      .filter(option =>
+        option.procedureIds.some(id => procedureIds.includes(id))
+      )
+      .map(option => option.procedureName)
 
   const templateParts =
     templateIds.map(
@@ -232,7 +257,7 @@ function StatisticsScreen({
     applyStatisticsFilters(treatments, filters)
 
   const procedureOptions =
-    calculateProcedureStatistics(treatments)
+    calculateProcedureFilterOptions(treatments)
 
   /*
     Template filter options are scoped to whatever procedure/tooth
@@ -313,7 +338,7 @@ function StatisticsScreen({
       selectedToothGroups,
       selectedToothIds,
       selectedTemplateIds,
-      procedures,
+      procedureOptions,
       templates
     ) +
     (selectedDatePresetId === 'allTime'
@@ -378,7 +403,7 @@ function StatisticsScreen({
       compareToothGroups,
       [],
       [],
-      procedures,
+      procedureOptions,
       templates
     ) +
     (compareDatePresetId === 'allTime'
@@ -423,16 +448,18 @@ function StatisticsScreen({
             {procedureOptions.map(option => (
 
               <button
-                key={option.procedureId}
+                key={option.procedureName.toLowerCase()}
                 type="button"
                 className={`stats-filter-button ${
-                  selectedProcedureIds.includes(option.procedureId)
+                  option.procedureIds.every(id =>
+                    selectedProcedureIds.includes(id)
+                  )
                     ? 'stats-filter-active'
                     : ''
                 }`}
                 onClick={() =>
                   setSelectedProcedureIds(
-                    toggleId(selectedProcedureIds, option.procedureId)
+                    toggleIds(selectedProcedureIds, option.procedureIds)
                   )
                 }
               >
@@ -671,16 +698,18 @@ function StatisticsScreen({
               {procedureOptions.map(option => (
 
                 <button
-                  key={option.procedureId}
+                  key={option.procedureName.toLowerCase()}
                   type="button"
                   className={`stats-filter-button ${
-                    compareProcedureIds.includes(option.procedureId)
+                    option.procedureIds.every(id =>
+                      compareProcedureIds.includes(id)
+                    )
                       ? 'stats-filter-active'
                       : ''
                   }`}
                   onClick={() =>
                     setCompareProcedureIds(
-                      toggleId(compareProcedureIds, option.procedureId)
+                      toggleIds(compareProcedureIds, option.procedureIds)
                     )
                   }
                 >

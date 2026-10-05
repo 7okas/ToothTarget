@@ -215,8 +215,16 @@ function diagnoseProcedure(value: unknown): string | null {
     return 'is missing a valid template id'
   }
 
-  if (candidate.isCustom !== true) {
-    return 'is not marked as a custom procedure (a built-in procedure should never appear in synced data)'
+  if (typeof candidate.isCustom !== 'boolean') {
+    return 'is missing a valid isCustom flag'
+  }
+
+  if (
+    candidate.status !== undefined &&
+    candidate.status !== 'active' &&
+    candidate.status !== 'archived'
+  ) {
+    return 'has an invalid status (must be "active" or "archived" if present)'
   }
 
   if (

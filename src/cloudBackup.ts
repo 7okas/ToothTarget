@@ -44,6 +44,13 @@ export type CloudBackup = {
   patients: Patient[]
   savedTreatments: SavedTreatment[]
   customTemplates: ProcedureTemplate[]
+  /*
+    Field name kept as-is for backward compatibility with older
+    backup files, even though it no longer means "only the isCustom
+    ones" (follow-up to Phase 2 of the Sync & Statistics Redesign) -
+    it now holds every procedure, including a former "built-in".
+    See createCloudBackup()/applyCloudRestore() below.
+  */
   customProcedures: Procedure[]
 }
 
@@ -101,11 +108,23 @@ function readLocalArray(key: string): unknown[] {
 
   Builds today's cloud backup snapshot directly from localStorage -
   the same source of truth App.tsx itself loads from - filtering
-  templates/procedures down to the custom ones only. Built-in
-  templates/procedures are never included: they already ship in the
-  app's own code on every device, so uploading them would be both
-  redundant and a future staleness risk if a later ToothTarget
-  version ever changes a built-in's defaults.
+  TEMPLATES down to the custom ones only. Built-in templates are
+  never included: they already ship in the app's own code on every
+  device, so uploading them would be both redundant and a future
+  staleness risk if a later ToothTarget version ever changes a
+  built-in's defaults.
+
+  PROCEDURES are NOT filtered any more (follow-up to Phase 2 of the
+  Sync & Statistics Redesign) - every procedure is backed up as-is,
+  including a former "built-in" and its status (active/archived).
+  Unlike templates, a procedure's content (name, status) CAN now
+  change via ordinary user action (rename/archive - see App.tsx's
+  confirmEditProcedure()/setProcedureArchiveStatusInRegistry()), so
+  omitting former built-ins here would silently lose that history on
+  restore - exactly the bug this follow-up fixes. See
+  isValidCloudProcedure()/applyCloudRestore() below for how an OLDER
+  backup (customProcedures containing only ever-custom entries, no
+  status field) still restores correctly.
 */
 
 export function createCloudBackup(): CloudBackup {
@@ -128,9 +147,7 @@ export function createCloudBackup(): CloudBackup {
     customTemplates: templates.filter(
       template => template.isCustom === true
     ),
-    customProcedures: procedures.filter(
-      procedure => procedure.isCustom === true
-    ),
+    customProcedures: procedures,
   }
 
 }
@@ -208,14 +225,30 @@ function isValidCloudTemplate(value: unknown): value is ProcedureTemplate {
 
 }
 
+/*
+  status is optional and, when present, must be 'active' or
+  'archived' - optional (rather than required) specifically so an
+  OLDER backup file, written before this field existed, still
+  validates exactly as before. Matches cloudSync.ts's own
+  isValidSyncProcedure() - see that validator's comment for the full
+  reasoning (same field, same backward-compatibility requirement).
+*/
+
 function isValidCloudProcedure(value: unknown): value is Procedure {
 
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+
   return (
-    !!value &&
-    typeof value === 'object' &&
-    typeof (value as Procedure).id === 'string' &&
-    typeof (value as Procedure).name === 'string' &&
-    typeof (value as Procedure).templateId === 'string'
+    typeof candidate.id === 'string' &&
+    typeof candidate.name === 'string' &&
+    typeof candidate.templateId === 'string' &&
+    (candidate.status === undefined ||
+      candidate.status === 'active' ||
+      candidate.status === 'archived')
   )
 
 }
@@ -390,11 +423,25 @@ function downloadSafetyBackup(): void {
     identity migration already recomputes it safely as
     max(current counter, highest patientNumber + 1) on the very next
     load, so it can never collide with a restored patient's number.)
-  - Templates/procedures REPLACE only the custom (isCustom: true)
-    entries - this device's built-in templates/procedures (isCustom:
-    false), already present in localStorage, are preserved exactly
-    as they are; the backup never contains built-ins to restore in
-    the first place.
+  - Templates REPLACE only the custom (isCustom: true) entries - this
+    device's built-in templates (isCustom: false), already present in
+    localStorage, are preserved exactly as they are; a template
+    backup never contains built-ins to restore in the first place.
+  - Procedures are restored BY ID, not wholesale (follow-up to Phase
+    2 of the Sync & Statistics Redesign): every procedure id present
+    in the backup overwrites this device's current copy of that id
+    (including a former "built-in", with whatever name/status the
+    backup recorded); every id on this device NOT present in the
+    backup is left exactly as it currently is. This one rule handles
+    both backup shapes correctly with no separate code path:
+      - an OLDER backup (made before procedures included built-ins)
+        only ever lists ever-custom ids, so the original five tags
+        this device already has are simply never mentioned and stay
+        exactly as they are - restoring an old backup can never
+        delete or archive them.
+      - a NEWER backup lists every procedure, so restoring it
+        legitimately brings back a renamed or archived original tag,
+        exactly like restoring any other record.
   - toothTargetActiveTreatment and toothTargetIncompleteTreatments are
     never written here at all - they stay exactly as this device
     already has them.
@@ -434,14 +481,54 @@ export function applyCloudRestore(backup: CloudBackup): void {
   const currentProcedures =
     readLocalArray(PROCEDURES_KEY) as Procedure[]
 
-  const builtInProcedures =
-    currentProcedures.filter(procedure => procedure.isCustom === false)
-
   localStorage.setItem(
     PROCEDURES_KEY,
-    JSON.stringify([...builtInProcedures, ...backup.customProcedures])
+    JSON.stringify(
+      mergeProceduresForRestore(currentProcedures, backup.customProcedures)
+    )
   )
 
   window.location.reload()
+
+}
+
+/*
+  Pulled out as its own pure, directly-testable function (same "thin
+  orchestration over a tested pure core" split this project already
+  uses elsewhere - see cloudBackupRotation.ts/startupGate.ts) since
+  applyCloudRestore() itself can't be unit-tested head-on: it
+  downloads a file and reloads the page, neither of which exists in
+  this project's Node-environment test runner.
+
+  Restores BY ID rather than wholesale-replacing the array: every id
+  the backup mentions overwrites this device's current copy of that
+  id (name, status, whatever the backup recorded); every id this
+  device currently has that the backup does NOT mention is left
+  completely untouched. One rule, both backward-compatibility cases
+  for free:
+  - an OLDER backup (made before procedures included built-ins) only
+    ever lists ever-custom ids, so the original five tags this
+    device already has are simply never mentioned here and come back
+    out exactly as they went in - restoring an old backup can never
+    delete or archive them.
+  - a NEWER backup lists every procedure it had at export time, so
+    restoring it legitimately overwrites a renamed or archived
+    original tag with the backup's own recorded name/status, exactly
+    like restoring any other record.
+*/
+export function mergeProceduresForRestore(
+  currentProcedures: Procedure[],
+  backupProcedures: Procedure[]
+): Procedure[] {
+
+  const proceduresById = new Map(
+    currentProcedures.map(procedure => [procedure.id, procedure])
+  )
+
+  backupProcedures.forEach(procedure => {
+    proceduresById.set(procedure.id, procedure)
+  })
+
+  return Array.from(proceduresById.values())
 
 }

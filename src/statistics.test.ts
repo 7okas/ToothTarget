@@ -17,6 +17,7 @@ import {
   calculateTreatmentStatistics,
   calculatePhaseStatistics,
   calculateProcedureStatistics,
+  calculateProcedureFilterOptions,
   calculateOvertimeStatistics,
   calculateTimeLossInsights,
   calculateRctRegionStatistics,
@@ -767,6 +768,87 @@ describe('calculateProcedureStatistics', () => {
       averageExpectedDuration: 1680,
       averageActualDuration: 1800,
     })
+
+  })
+
+})
+
+
+describe('calculateProcedureFilterOptions', () => {
+
+  /*
+    Regression coverage for the "delete and recreate a procedure with
+    the same name produces two indistinguishable filter buttons" bug -
+    calculateProcedureStatistics() (above) is still id-keyed so a
+    rename alone never merges anything, but the filter picker built
+    from calculateProcedureFilterOptions() must treat every id that
+    has ever shared a name as one selectable option covering all of
+    them.
+  */
+
+  it('merges two different ids sharing the same procedure name into one option', () => {
+
+    const options = calculateProcedureFilterOptions([
+      makeTreatment({ id: 't1', procedureId: 'rct-old', procedureName: 'RCT' }),
+      makeTreatment({ id: 't2', procedureId: 'rct-new', procedureName: 'RCT' }),
+    ])
+
+    expect(options).toHaveLength(1)
+    expect(options[0].procedureName).toBe('RCT')
+    expect(options[0].procedureIds.sort()).toEqual(['rct-new', 'rct-old'])
+    expect(options[0].treatmentCount).toBe(2)
+
+  })
+
+  it('matches procedure names ignoring case and leading/trailing whitespace', () => {
+
+    const options = calculateProcedureFilterOptions([
+      makeTreatment({ id: 't1', procedureId: 'rct-old', procedureName: 'RCT' }),
+      makeTreatment({ id: 't2', procedureId: 'rct-new', procedureName: '  rct  ' }),
+      makeTreatment({ id: 't3', procedureId: 'filling', procedureName: 'Filling' }),
+    ])
+
+    expect(options).toHaveLength(2)
+
+    const rctOption = options.find(option => option.procedureIds.includes('rct-old'))
+    expect(rctOption?.procedureIds.sort()).toEqual(['rct-new', 'rct-old'])
+    expect(rctOption?.treatmentCount).toBe(2)
+
+  })
+
+  it('leaves a procedure that has only ever had one id behaving exactly as before', () => {
+
+    const options = calculateProcedureFilterOptions([
+      makeTreatment({ id: 't1', procedureId: 'filling', procedureName: 'Filling' }),
+      makeTreatment({ id: 't2', procedureId: 'filling', procedureName: 'Filling' }),
+    ])
+
+    expect(options).toHaveLength(1)
+    expect(options[0]).toMatchObject({
+      procedureName: 'Filling',
+      procedureIds: ['filling'],
+      treatmentCount: 2,
+    })
+
+  })
+
+  it('selecting a merged option\'s ids via the existing id-list filter includes treatments from every id that shares the name', () => {
+
+    const treatments = [
+      makeTreatment({ id: 't1', procedureId: 'rct-old', procedureName: 'RCT' }),
+      makeTreatment({ id: 't2', procedureId: 'rct-new', procedureName: 'RCT' }),
+      makeTreatment({ id: 't3', procedureId: 'filling', procedureName: 'Filling' }),
+    ]
+
+    const options = calculateProcedureFilterOptions(treatments)
+    const rctOption = options.find(option => option.procedureName === 'RCT')
+
+    const filtered = applyStatisticsFilters(treatments, {
+      ...ALL_TREATMENTS_FILTER,
+      procedureIds: rctOption?.procedureIds ?? [],
+    })
+
+    expect(filtered.map(t => t.id).sort()).toEqual(['t1', 't2'])
 
   })
 
