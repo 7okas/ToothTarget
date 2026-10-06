@@ -538,6 +538,30 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
 
   })
 
+  it('a cloud-invalid result with NO diagnosis still triggers the corruption dialog, with a generic diagnosis', async () => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce({
+      status: 'cloud-invalid',
+      detail: 'Cloud document is invalid',
+    })
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    const outcome = getLastSyncOutcome()
+
+    // The dialog trigger (isCorruptedSyncOutcome, tested in
+    // cloudCorruptionRecovery.test.ts) is: needs-input AND a diagnosis
+    // present. The scheduler stores exactly that for a diagnosis-less
+    // cloud-invalid result, so the restore options stay reachable.
+    expect(outcome?.state).toBe('needs-input')
+    expect(outcome?.diagnosis).toEqual({
+      kind: 'unreadable',
+      reason: 'The cloud file failed validation.',
+    })
+
+  })
+
   it('updates on every resolved attempt, overwriting the previous outcome', async () => {
 
     mockedSyncCloudNow.mockResolvedValueOnce({ status: 'auth-failed' })
