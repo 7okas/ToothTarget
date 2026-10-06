@@ -5,6 +5,8 @@ import {
   classifySyncOutcome,
   describeSyncOutcome,
   SYNC_OUTCOME_COPY,
+  SYNC_STATE_HEADING,
+  SYNC_STATE_OF_OUTCOME,
   type SyncOutcomeType,
 } from './syncOutcome'
 
@@ -298,6 +300,42 @@ describe('describeSyncOutcome', () => {
 
     expect(describeSyncOutcome(reason)).toEqual(describeSyncOutcome(reason))
 
+  })
+
+})
+
+describe('SYNC_STATE_OF_OUTCOME - every outcome belongs to exactly one of the four states', () => {
+
+  it('maps each outcome type as planned', () => {
+    expect(SYNC_STATE_OF_OUTCOME).toEqual({
+      synced: 'synced',
+      'save-incomplete': 'offline',
+      offline: 'offline',
+      'onedrive-unavailable': 'offline',
+      diverged: 'conflict',
+      'cloud-data-corrupted': 'needs-input',
+      'local-data-invalid': 'needs-input',
+      'not-signed-in': 'needs-input',
+      'sign-in-denied': 'needs-input',
+    })
+  })
+
+  it('agrees with the existing needsAttention flag: conflict/needs-input exactly when it is true', () => {
+    for (const type of Object.keys(SYNC_STATE_OF_OUTCOME) as SyncOutcomeType[]) {
+      const state = SYNC_STATE_OF_OUTCOME[type]
+      expect(state === 'conflict' || state === 'needs-input').toBe(
+        describeSyncOutcome({ type }).needsAttention
+      )
+    }
+  })
+
+  it('has the four headings', () => {
+    expect(SYNC_STATE_HEADING).toEqual({
+      synced: 'Synced',
+      offline: 'Offline, will retry',
+      conflict: 'Sync conflict',
+      'needs-input': 'Needs your input',
+    })
   })
 
 })

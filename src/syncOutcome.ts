@@ -37,6 +37,42 @@ export type SyncOutcomeType =
   | 'onedrive-unavailable'
   | 'diverged'
 
+/*
+  THE FOUR SYNC STATES (Phase 7)
+
+  Everything the dentist is ever told about a sync result is one of
+  these four. The specific reason stays as one line of detail text (see
+  SYNC_OUTCOME_COPY below) - it is never a state of its own.
+    synced       - nothing to do.
+    offline      - the app will retry by itself (no connection,
+                   OneDrive unavailable, or a save that will be retried).
+    conflict     - this device and OneDrive both changed; the dentist
+                   decides in the resolution screen.
+    needs-input  - the dentist has to act (sign in again, a corrupted
+                   cloud file, invalid data on this device).
+*/
+
+export type SyncState = 'synced' | 'offline' | 'conflict' | 'needs-input'
+
+export const SYNC_STATE_HEADING: Record<SyncState, string> = {
+  synced: 'Synced',
+  offline: 'Offline, will retry',
+  conflict: 'Sync conflict',
+  'needs-input': 'Needs your input',
+}
+
+export const SYNC_STATE_OF_OUTCOME: Record<SyncOutcomeType, SyncState> = {
+  synced: 'synced',
+  'save-incomplete': 'offline',
+  offline: 'offline',
+  'onedrive-unavailable': 'offline',
+  diverged: 'conflict',
+  'cloud-data-corrupted': 'needs-input',
+  'local-data-invalid': 'needs-input',
+  'not-signed-in': 'needs-input',
+  'sign-in-denied': 'needs-input',
+}
+
 export type SyncOutcomeReason = {
   type: SyncOutcomeType
   /*
