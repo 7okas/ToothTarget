@@ -50,10 +50,12 @@ function mean(values: number[]): number | null {
   TOOTH_GROUPS), so the filtering engine itself only ever deals with
   plain toothId strings.
 
-  The shape is deliberately open so future filters (patient) can be
-  added as additional optional fields without changing every call
-  site - applyStatisticsFilters() is the single place that would
-  grow to handle them.
+  Two ways to narrow the same list, both handled here: the PRESET
+  filters above (procedure / template / tooth / date range), and, in
+  the Statistics screen's "Checked treatments" mode, an explicit list of
+  treatment ids (treatmentIds). Either way the result is just a shorter
+  list of treatments, so every calculation below works identically on
+  both. applyStatisticsFilters() is the single place that applies them.
 */
 
 export type DateRange = {
@@ -79,8 +81,6 @@ export type StatisticsFilters = {
     selection feeds exactly the same calculations as the presets.
   */
   treatmentIds?: string[] | null
-  // Reserved for future filters - intentionally unimplemented for now:
-  // patientId?: string | null
 }
 
 export const ALL_TREATMENTS_FILTER: StatisticsFilters = {
@@ -163,11 +163,11 @@ export function applyStatisticsFilters(
   case-type-filtered view.
 
   Deliberately a separate filtering step from applyStatisticsFilters()
-  above, rather than a new StatisticsFilters field - that filter
-  engine is the "manual-selection mode" (procedure/tooth/template/
-  date) this phase is explicitly not allowed to touch; a caller runs
-  this FIRST, over the full treatment list, then hands the result to
-  applyStatisticsFilters() exactly as before.
+  above, rather than a new StatisticsFilters field - it needs the
+  patient list, which that engine never sees. A caller runs this
+  FIRST, over the full treatment list, then hands the result to
+  applyStatisticsFilters() (or uses it as the list the checked-treatments
+  table and the by-month table are built from).
 */
 
 export type CaseTypeFilter = 'clinical' | 'practice' | 'both'
@@ -243,6 +243,11 @@ export function resolveDateRangePreset(
     return null
   }
 
+  /*
+    The caller builds customRange from the two date-picker values with
+    resolveCustomDateRange() (whole LOCAL calendar days); it is passed
+    through here unchanged.
+  */
   if (presetId === 'custom') {
     return customRange
   }

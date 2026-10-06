@@ -155,10 +155,10 @@ function StatisticsScreen({
     phase's own spec ("the preset/readymade statistics default to
     Clinical only"). Deliberately its own, separate piece of state
     from everything below: it's applied to `treatments` BEFORE the
-    manual-selection filter engine (applyStatisticsFilters()) ever
-    sees them, so that engine - and every one of its own
-    procedure/tooth/template pickers below - stays completely
-    untouched by this phase.
+    preset filter engine (applyStatisticsFilters()) or the checked
+    treatments ever see them, so it narrows both modes (and the by-month
+    table) the same way, and the preset procedure/tooth/template pickers
+    below stay exactly as they were.
   */
 
   const [caseTypeFilter, setCaseTypeFilter] =
@@ -461,7 +461,8 @@ function StatisticsScreen({
     A plain-language summary of the active filter combination, e.g.
     "All Molars — RCT" or "UR6 + UL6 — RCT" or "All Treatments" -
     this is what lets the dentist see at a glance whether they're
-    looking at one tooth, a tooth group, a procedure, or everything.
+    looking at one tooth, a tooth group, a procedure, or everything
+    (in Checked treatments mode it is simply "N checked treatments").
   */
 
   const selectedDatePresetLabel =
