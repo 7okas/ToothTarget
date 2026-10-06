@@ -41,6 +41,20 @@ export const SYNC_STATE_HEADING: Record<SyncState, string> = {
   'needs-input': 'Needs your input',
 }
 
+/*
+  What the dentist can usefully DO about an outcome, so a screen can offer
+  the right button without re-reading the reason:
+    'retry'    - nothing is wrong with the data or the sign-in; trying again
+                 can succeed (offline, OneDrive unreachable, a local save
+                 that will be retried)
+    'sign-in'  - the Microsoft sign-in has to be renewed (expired, denied)
+    'none'     - no button helps: everything is fine, or the next step is
+                 somewhere else (a conflict goes to the resolution screen,
+                 a corrupted cloud file to the recovery dialog, invalid
+                 data on this device needs looking at)
+*/
+export type SyncOutcomeAction = 'retry' | 'sign-in' | 'none'
+
 export type SyncOutcomeReason = {
   state: SyncState
   /*
@@ -48,6 +62,7 @@ export type SyncOutcomeReason = {
     status codes, "Graph API").
   */
   detail: string
+  action: SyncOutcomeAction
   /*
     Only set for the corrupted-cloud-file case - the corruption dialog
     reads it to explain WHY the file was rejected, not just THAT it was.
@@ -73,7 +88,7 @@ export function classifySyncOutcome(
   switch (result.status) {
 
     case 'synced':
-      return { state: 'synced', detail: 'Synced' }
+      return { state: 'synced', detail: 'Synced', action: 'none' }
 
     /*
       The cloud write genuinely succeeded, but saving it back to THIS
@@ -86,6 +101,7 @@ export function classifySyncOutcome(
         state: 'offline',
         detail:
           "Synced to the cloud, but couldn't finish saving on this device — will retry automatically",
+        action: 'retry',
       }
 
     /*
@@ -98,6 +114,7 @@ export function classifySyncOutcome(
       return {
         state: 'needs-input',
         detail: 'Cloud data looks corrupted — this needs attention',
+        action: 'none',
         diagnosis: result.diagnosis ?? GENERIC_CORRUPTION_DIAGNOSIS,
       }
 
@@ -109,6 +126,7 @@ export function classifySyncOutcome(
       return {
         state: 'needs-input',
         detail: "Something's wrong with this device's data — this needs attention",
+        action: 'none',
       }
 
     /*
@@ -119,6 +137,7 @@ export function classifySyncOutcome(
       return {
         state: 'needs-input',
         detail: 'Your Microsoft sign-in has expired — please sign in again',
+        action: 'sign-in',
       }
 
     /* OneDrive refused for a permissions reason (a 403). */
@@ -126,6 +145,7 @@ export function classifySyncOutcome(
       return {
         state: 'needs-input',
         detail: 'OneDrive access was denied — please sign in again',
+        action: 'sign-in',
       }
 
     /*
@@ -136,6 +156,7 @@ export function classifySyncOutcome(
       return {
         state: 'offline',
         detail: "No internet connection — will sync once you're back online",
+        action: 'retry',
       }
 
     /*
@@ -146,6 +167,7 @@ export function classifySyncOutcome(
       return {
         state: 'offline',
         detail: "Couldn't reach OneDrive — will try again automatically",
+        action: 'retry',
       }
 
     /*
@@ -159,6 +181,7 @@ export function classifySyncOutcome(
         detail:
           'This device and OneDrive both have changes; nothing was overwritten. ' +
           'Tap to review the differences.',
+        action: 'none',
       }
 
   }

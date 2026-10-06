@@ -495,7 +495,7 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(getLastSyncOutcome()).toEqual({ state: 'synced', detail: 'Synced' })
+    expect(getLastSyncOutcome()).toEqual({ state: 'synced', detail: 'Synced', action: 'none' })
 
   })
 
@@ -506,7 +506,7 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(getLastSyncOutcome()).toEqual({ state: 'needs-input', detail: 'Your Microsoft sign-in has expired — please sign in again' })
+    expect(getLastSyncOutcome()).toEqual({ state: 'needs-input', detail: 'Your Microsoft sign-in has expired — please sign in again', action: 'sign-in' })
 
   })
 
@@ -520,7 +520,7 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(getLastSyncOutcome()).toEqual({ state: 'offline', detail: "No internet connection — will sync once you're back online" })
+    expect(getLastSyncOutcome()).toEqual({ state: 'offline', detail: "No internet connection — will sync once you're back online", action: 'retry' })
 
   })
 
@@ -534,7 +534,7 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(getLastSyncOutcome()).toEqual({ state: 'offline', detail: "Couldn't reach OneDrive — will try again automatically" })
+    expect(getLastSyncOutcome()).toEqual({ state: 'offline', detail: "Couldn't reach OneDrive — will try again automatically", action: 'retry' })
 
   })
 
@@ -569,14 +569,14 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(getLastSyncOutcome()).toEqual({ state: 'needs-input', detail: 'Your Microsoft sign-in has expired — please sign in again' })
+    expect(getLastSyncOutcome()).toEqual({ state: 'needs-input', detail: 'Your Microsoft sign-in has expired — please sign in again', action: 'sign-in' })
 
     mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(getLastSyncOutcome()).toEqual({ state: 'synced', detail: 'Synced' })
+    expect(getLastSyncOutcome()).toEqual({ state: 'synced', detail: 'Synced', action: 'none' })
 
   })
 
@@ -594,7 +594,7 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
     await flushMicrotasks()
 
     expect(listener).toHaveBeenCalled()
-    expect(getLastSyncOutcome()).toEqual({ state: 'needs-input', detail: 'OneDrive access was denied — please sign in again' })
+    expect(getLastSyncOutcome()).toEqual({ state: 'needs-input', detail: 'OneDrive access was denied — please sign in again', action: 'sign-in' })
 
     unsubscribe()
 
@@ -747,7 +747,7 @@ describe('Phase 6 resolution hooks (not called by anything yet)', () => {
 
     reportResolutionApplied()
 
-    expect(getLastSyncOutcome()).toEqual({ state: 'synced', detail: 'Synced' })
+    expect(getLastSyncOutcome()).toEqual({ state: 'synced', detail: 'Synced', action: 'none' })
     expect(getCloudSyncStatus()).toBe('synced')
     expect(getLocalDataVersion()).toBe(1)
     expect(mockedMaybeRotateBackup).toHaveBeenCalledTimes(1)

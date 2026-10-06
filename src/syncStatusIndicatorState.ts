@@ -154,6 +154,40 @@ export function canShowDetailFromBadge(
 }
 
 /*
+  WHICH BUTTON THE BADGE'S DETAIL PANEL OFFERS
+
+  Decided from the outcome's action (set where the outcome is classified,
+  see syncOutcome.ts), never by re-reading the detail wording:
+    action 'retry'    -> "Sync now"
+    action 'sign-in'  -> "Sign in again"
+    action 'none'     -> no button
+  A conflict never gets a button here, whatever its action says: tapping
+  the badge already opens the resolution screen, and retrying would only
+  report the same disagreement again. Neither does the synced state or a
+  missing outcome.
+*/
+export type BadgePanelButton = 'sync-now' | 'sign-in-again'
+
+export function badgePanelButton(
+  outcome: SyncOutcomeReason | null
+): BadgePanelButton | null {
+
+  if (outcome === null || outcome.state === 'conflict' || outcome.state === 'synced') {
+    return null
+  }
+
+  switch (outcome.action) {
+    case 'retry':
+      return 'sync-now'
+    case 'sign-in':
+      return 'sign-in-again'
+    default:
+      return null
+  }
+
+}
+
+/*
   MANUAL SYNC-ON-CLICK GUARD (Phase 8)
 
   Pure, same reasoning as reduceSyncIndicatorState() above. The

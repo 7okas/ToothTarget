@@ -5,6 +5,7 @@ import {
   classifySyncOutcome,
   describeSyncOutcome,
   SYNC_STATE_HEADING,
+  type SyncOutcomeAction,
   type SyncState,
 } from './syncOutcome'
 
@@ -18,6 +19,7 @@ type Row = {
   result: CloudSyncResult
   state: SyncState
   detail: string
+  action: SyncOutcomeAction
 }
 
 const ROWS: Row[] = [
@@ -25,22 +27,26 @@ const ROWS: Row[] = [
     result: { status: 'synced' },
     state: 'synced',
     detail: 'Synced',
+    action: 'none',
   },
   {
     result: { status: 'cloud-committed-locally-pending', detail: 'quota exceeded' },
     state: 'offline',
     detail:
       "Synced to the cloud, but couldn't finish saving on this device — will retry automatically",
+    action: 'retry',
   },
   {
     result: { status: 'cloud-invalid', detail: 'bad file' },
     state: 'needs-input',
     detail: 'Cloud data looks corrupted — this needs attention',
+    action: 'none',
   },
   {
     result: { status: 'validation-failed', detail: 'bad local data' },
     state: 'needs-input',
     detail: "Something's wrong with this device's data — this needs attention",
+    action: 'none',
   },
   {
     result: { status: 'diverged', detail: 'both changed' },
@@ -48,26 +54,31 @@ const ROWS: Row[] = [
     detail:
       'This device and OneDrive both have changes; nothing was overwritten. ' +
       'Tap to review the differences.',
+    action: 'none',
   },
   {
     result: { status: 'auth-failed' },
     state: 'needs-input',
     detail: 'Your Microsoft sign-in has expired — please sign in again',
+    action: 'sign-in',
   },
   {
     result: { status: 'permission-denied', detail: '403' },
     state: 'needs-input',
     detail: 'OneDrive access was denied — please sign in again',
+    action: 'sign-in',
   },
   {
     result: { status: 'network-unreachable', detail: 'Failed to fetch' },
     state: 'offline',
     detail: "No internet connection — will sync once you're back online",
+    action: 'retry',
   },
   {
     result: { status: 'graph-error', detail: '503' },
     state: 'offline',
     detail: "Couldn't reach OneDrive — will try again automatically",
+    action: 'retry',
   },
 ]
 
@@ -84,6 +95,21 @@ describe('classifySyncOutcome - every CloudSyncResult maps to one of the four st
 
     }
   )
+
+  it.each(ROWS.map(row => [row.result.status, row] as const))(
+    '%s carries the right action',
+    (_status, row) => {
+      expect(classifySyncOutcome(row.result).action).toBe(row.action)
+    }
+  )
+
+  it('the actions are exactly: retry for offline-type results, sign-in for sign-in problems, none for the rest', () => {
+    const byAction = (action: SyncOutcomeAction) =>
+      ROWS.filter(row => row.action === action).map(row => row.result.status).sort()
+    expect(byAction('retry')).toEqual(['cloud-committed-locally-pending', 'graph-error', 'network-unreachable'])
+    expect(byAction('sign-in')).toEqual(['auth-failed', 'permission-denied'])
+    expect(byAction('none')).toEqual(['cloud-invalid', 'diverged', 'synced', 'validation-failed'])
+  })
 
   it('covers every status the engine can produce', () => {
 

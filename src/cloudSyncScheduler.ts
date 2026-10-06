@@ -290,7 +290,7 @@ export function notifyLocalDataReplaced(): void {
 
 export function reportResolutionApplied(): void {
 
-  setLastSyncOutcome({ state: 'synced', detail: 'Synced' })
+  setLastSyncOutcome({ state: 'synced', detail: 'Synced', action: 'none' })
   setStatus('synced')
   bumpLocalDataVersion()
 

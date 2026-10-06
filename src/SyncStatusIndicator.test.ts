@@ -32,6 +32,7 @@ import {
   canTriggerManualSync,
   canReviewDifferencesFromBadge,
   canShowDetailFromBadge,
+  badgePanelButton,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
 } from './syncStatusIndicatorState'
@@ -487,6 +488,56 @@ describe('canShowDetailFromBadge - the detail line is reachable by tap (iPad), n
     expect(canShowDetailFromBadge(null, OFFLINE)).toBe(false)
     expect(canShowDetailFromBadge('failure', null)).toBe(false)
 
+  })
+
+})
+
+describe('badgePanelButton - which button the badge panel offers', () => {
+
+  const expectations: [string, ReturnType<typeof badgePanelButton>][] = [
+    ['synced', null],
+    ['cloud-committed-locally-pending', 'sync-now'],
+    ['cloud-invalid', null],
+    ['validation-failed', null],
+    ['diverged', null],
+    ['auth-failed', 'sign-in-again'],
+    ['permission-denied', 'sign-in-again'],
+    ['network-unreachable', 'sync-now'],
+    ['graph-error', 'sync-now'],
+  ]
+
+  it.each(expectations)('result "%s"', (status, expected) => {
+    const result = ALL_RESULTS.find(item => item.status === status)!
+    expect(badgePanelButton(classifySyncOutcome(result))).toBe(expected)
+  })
+
+  it('covers every result the engine can produce', () => {
+    expect(expectations.map(([status]) => status).sort()).toEqual(
+      ALL_RESULTS.map(result => result.status).sort()
+    )
+  })
+
+  it('a conflict never gets a button, even if its action said otherwise', () => {
+    expect(badgePanelButton({ state: 'conflict', detail: 'x', action: 'retry' })).toBeNull()
+    expect(badgePanelButton({ state: 'conflict', detail: 'x', action: 'sign-in' })).toBeNull()
+  })
+
+  it('the synced state never gets a button', () => {
+    expect(badgePanelButton({ state: 'synced', detail: 'Synced', action: 'retry' })).toBeNull()
+  })
+
+  it('no outcome means no button', () => {
+    expect(badgePanelButton(null)).toBeNull()
+  })
+
+  it('an action of "none" means no button, in any non-conflict state', () => {
+    expect(badgePanelButton({ state: 'needs-input', detail: 'x', action: 'none' })).toBeNull()
+    expect(badgePanelButton({ state: 'offline', detail: 'x', action: 'none' })).toBeNull()
+  })
+
+  it('the offline and needs-input states get their button from the action alone', () => {
+    expect(badgePanelButton({ state: 'offline', detail: 'x', action: 'retry' })).toBe('sync-now')
+    expect(badgePanelButton({ state: 'needs-input', detail: 'x', action: 'sign-in' })).toBe('sign-in-again')
   })
 
 })
