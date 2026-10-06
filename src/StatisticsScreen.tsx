@@ -3,6 +3,7 @@ import type { Patient, Procedure, ProcedureTemplate, SavedTreatment } from './Ap
 import BackButton from './BackButton'
 import TimeTrendChart from './TimeTrendChart'
 import CheckedTreatmentsPanel from './CheckedTreatmentsPanel'
+import MonthlyTable from './MonthlyTable'
 import ToothChart from './ToothChart'
 import { formatTime, formatSignedTime, formatDate } from './format'
 import { getToothLabel, getToothById, TOOTH_GROUPS, type ToothGroup } from './teeth'
@@ -13,6 +14,7 @@ import {
   resolveToothSelection,
   resolveDateRangePreset,
   resolveCustomDateRange,
+  calculateMonthlyStatistics,
   MIN_SAMPLE_SIZE,
   DATE_RANGE_PRESETS,
   calculateTreatmentStatistics,
@@ -28,6 +30,7 @@ import {
   type DateRangePresetId,
   type ProcedureFilterOption,
   type CaseTypeFilter,
+  type MonthlySpan,
 } from './statistics'
 import {
   clearCheckedTreatments,
@@ -36,6 +39,11 @@ import {
   setCheckedTreatmentIds,
   subscribeCheckedTreatments,
 } from './checkedTreatmentsStore'
+import {
+  buildMonthlyTableRows,
+  decideMonthlySectionView,
+  monthlyFilters,
+} from './monthlyTableRules'
 import {
   describeCheckedCount,
   pruneToExisting,
@@ -247,6 +255,9 @@ function StatisticsScreen({
   const [statsMode, setStatsMode] =
     useState<StatisticsMode>('presets')
 
+  const [monthlySpan, setMonthlySpan] =
+    useState<MonthlySpan>('last6')
+
   const storedCheckedIds =
     useSyncExternalStore(
       subscribeCheckedTreatments,
@@ -340,6 +351,47 @@ function StatisticsScreen({
     inCheckedMode
       ? checkedResolution.statisticsTreatments
       : applyStatisticsFilters(caseTypeFilteredTreatments, filters)
+
+  /*
+    BY-MONTH TABLE: same filters as the rest of the screen except the
+    date range (calculateMonthlyStatistics() ignores it), run over the
+    list the case-type buttons already narrowed. All rules and wording
+    come from monthlyTableRules.ts.
+  */
+
+  const monthlyFilterSet =
+    monthlyFilters(inCheckedMode, filters, checkedIds)
+
+  const monthlySpanStats =
+    calculateMonthlyStatistics(
+      caseTypeFilteredTreatments,
+      monthlyFilterSet,
+      monthlySpan
+    )
+
+  const monthlyAllTimeStats =
+    monthlySpan === 'all'
+      ? monthlySpanStats
+      : calculateMonthlyStatistics(
+          caseTypeFilteredTreatments,
+          monthlyFilterSet,
+          'all'
+        )
+
+  const monthlySection = (
+    <MonthlyTable
+      view={decideMonthlySectionView({
+        inCheckedMode,
+        existingCheckedCount: checkedResolution.existingCheckedCount,
+        spanRows: monthlySpanStats,
+        allTimeRows: monthlyAllTimeStats,
+      })}
+      rows={buildMonthlyTableRows(monthlySpanStats)}
+      span={monthlySpan}
+      onSpanChange={setMonthlySpan}
+      inCheckedMode={inCheckedMode}
+    />
+  )
 
   const procedureOptions =
     calculateProcedureFilterOptions(caseTypeFilteredTreatments)
@@ -563,7 +615,7 @@ function StatisticsScreen({
               <button
                 key={option.id}
                 type="button"
-                className={`stats-filter-button ${
+                className={`stats-filter-button stats-case-type-button ${
                   caseTypeFilter === option.id
                     ? 'stats-filter-active'
                     : ''
@@ -1054,6 +1106,8 @@ function StatisticsScreen({
 
         )}
 
+        {filteredTreatments.length === 0 && monthlySection}
+
 
         {filteredTreatments.length > 0 && (
 
@@ -1167,6 +1221,11 @@ function StatisticsScreen({
               </div>
 
             </div>
+
+
+            {/* BY MONTH (below the overview) */}
+
+            {monthlySection}
 
 
             {/* WHERE AM I LOSING TIME */}
