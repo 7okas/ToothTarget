@@ -17,7 +17,7 @@ describe('signOutWithBestEffortSync', () => {
 
     const attemptSync = vi.fn<() => Promise<CloudSyncResult>>(async () => {
       callOrder.push('sync')
-      return { status: 'synced', patientNumberConflicts: [] }
+      return { status: 'synced' }
     })
 
     const performSignOut = vi.fn(async () => {
@@ -62,7 +62,7 @@ describe('signOutWithBestEffortSync', () => {
   it('never throws itself, even if signing out fails', async () => {
 
     const attemptSync = vi.fn<() => Promise<CloudSyncResult>>(
-      async () => ({ status: 'synced', patientNumberConflicts: [] })
+      async () => ({ status: 'synced' })
     )
 
     const performSignOut = vi.fn(async () => {

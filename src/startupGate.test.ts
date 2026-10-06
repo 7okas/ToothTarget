@@ -190,7 +190,7 @@ describe('computeStartupGateView - what the gate shows', () => {
 
   it('Phase 6: only the diverged outcome changes view; every other failure keeps the error view', () => {
 
-    for (const type of ['offline', 'not-signed-in', 'cloud-data-corrupted', 'patient-number-conflicts'] as const) {
+    for (const type of ['offline', 'not-signed-in', 'cloud-data-corrupted'] as const) {
 
       expect(
         computeStartupGateView(true, { passed: false, phase: 'error' }, { type })

@@ -28,10 +28,7 @@ import type { CloudSyncCorruptionDiagnosis } from './cloudSyncCorruptionDiagnosi
 
 export type SyncOutcomeType =
   | 'synced'
-  | 'synced-after-conflict'
-  | 'patient-number-conflicts'
   | 'save-incomplete'
-  | 'sync-busy'
   | 'cloud-data-corrupted'
   | 'local-data-invalid'
   | 'not-signed-in'
@@ -71,20 +68,10 @@ export function classifySyncOutcome(
   switch (result.status) {
 
     case 'synced':
-      return {
-        type: result.recoveredFromConflict
-          ? 'synced-after-conflict'
-          : 'synced',
-      }
-
-    case 'synced-with-conflicts':
-      return { type: 'patient-number-conflicts' }
+      return { type: 'synced' }
 
     case 'cloud-committed-locally-pending':
       return { type: 'save-incomplete' }
-
-    case 'contention':
-      return { type: 'sync-busy' }
 
     case 'cloud-invalid':
       return { type: 'cloud-data-corrupted', diagnosis: result.diagnosis }
@@ -144,34 +131,6 @@ export const SYNC_OUTCOME_COPY: Record<SyncOutcomeType, SyncOutcomeCopy> = {
   },
 
   /*
-    The sync succeeded - the dentist's data IS fully up to date - but
-    only after this device's own write collided with another device's
-    (a 412/409 from OneDrive) and was automatically re-read, re-merged,
-    and retried. Framed as resolved, not as a problem, because it is
-    one: nothing was lost, nothing needs a decision.
-  */
-  'synced-after-conflict': {
-    label: 'Synced (conflict resolved)',
-    detail: 'Sync conflict — resolved automatically',
-    needsAttention: false,
-  },
-
-  /*
-    Distinct from a plain conflict retry above: this is
-    patientNumberConflicts, a case where two DIFFERENT patients now
-    share the same patient number (eg. both devices allocated the same
-    number while offline). The sync itself succeeded, but the app
-    cannot decide on its own which patient should keep the number -
-    that is exactly what the existing conflict-resolution screen
-    (App.tsx's conflict browser) is for.
-  */
-  'patient-number-conflicts': {
-    label: 'Synced — needs attention',
-    detail: 'Synced, but some patient numbers need your attention',
-    needsAttention: true,
-  },
-
-  /*
     The cloud write genuinely succeeded - OneDrive already has the
     merged data - but saving it back to THIS device's own local storage
     failed (eg. a storage quota error). The next sync re-reads the
@@ -183,21 +142,6 @@ export const SYNC_OUTCOME_COPY: Record<SyncOutcomeType, SyncOutcomeCopy> = {
     label: 'Saving — will retry',
     detail:
       "Synced to the cloud, but couldn't finish saving on this device — will retry automatically",
-    needsAttention: false,
-  },
-
-  /*
-    Every attempt in this sync ran into another device writing at the
-    same moment (repeated 412/409s) and none of the (bounded) retries
-    won the race. Purely a timing collision between devices, not a
-    real problem with either device's data - the very next sync
-    attempt (triggered by the next mutation, or the scheduler's own
-    retry-on-reconnect) starts completely fresh and has no reason to
-    collide again.
-  */
-  'sync-busy': {
-    label: 'Busy — retrying',
-    detail: 'Busy syncing with another device — will try again shortly',
     needsAttention: false,
   },
 

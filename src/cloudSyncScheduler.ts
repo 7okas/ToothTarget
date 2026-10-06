@@ -59,7 +59,7 @@ import { maybeRotateBackup } from './cloudBackupRotation'
   ============================================================
 
   syncCloudNow() already resolves to a typed CloudSyncResult for every
-  outcome (including auth/permission/graph/contention/validation
+  outcome (including auth/permission/graph/validation
   failures) and should never reject - the .catch() below exists purely
   as a defensive backstop so a bug here can never throw out of a
   microtask and surface as an unhandled rejection, since this module
@@ -68,7 +68,7 @@ import { maybeRotateBackup } from './cloudBackupRotation'
   or retries on a timer: Phase 6 already owns bounded 412 retries, and
   per this phase's own scope, the next meaningful local mutation is
   what naturally triggers another attempt after any other failure
-  (auth, permission, network/graph, contention) - no new scheduled-
+  (auth, permission, network/graph) - no new scheduled-
   retry timer was added, since local data is never at risk either way
   (it was already durably committed to localStorage before
   requestCloudSync() was ever called - see this file's call sites in
@@ -162,7 +162,7 @@ function logSyncOutcome(result: CloudSyncResult): void {
 }
 
 function isSuccessStatus(result: CloudSyncResult): boolean {
-  return result.status === 'synced' || result.status === 'synced-with-conflicts'
+  return result.status === 'synced'
 }
 
 /*
@@ -214,10 +214,9 @@ export function subscribeLastSyncOutcome(listener: () => void): () => void {
   LOCAL DATA VERSION (UI refresh signal)
 
   A plain incrementing counter, bumped exactly once per sync attempt
-  whose result is 'synced' or 'synced-with-conflicts' - the two
-  statuses that only exist once cloudSyncEngine.ts's own
-  commitLocalState() has already run and succeeded (see that file's
-  header comment: 'cloud-committed-locally-pending' is returned
+  whose result is 'synced' - the one status that only exists
+  once cloudSyncEngine.ts's own commitLocalState() has already run and
+  succeeded (see that file's header comment: 'cloud-committed-locally-pending' is returned
   instead whenever the cloud write succeeded but the local commit
   itself threw, so it deliberately does NOT bump this).
 

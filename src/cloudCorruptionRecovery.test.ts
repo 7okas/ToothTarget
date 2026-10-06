@@ -49,10 +49,7 @@ describe('isCorruptedSyncOutcome - correctly identifies an unreadable live sync 
 
     const allTypes: SyncOutcomeType[] = [
       'synced',
-      'synced-after-conflict',
-      'patient-number-conflicts',
       'save-incomplete',
-      'sync-busy',
       'cloud-data-corrupted',
       'local-data-invalid',
       'not-signed-in',

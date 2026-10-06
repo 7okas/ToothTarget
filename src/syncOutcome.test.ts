@@ -19,67 +19,12 @@ import {
 
 describe('classifySyncOutcome - every CloudSyncResult status maps to its own distinct reason', () => {
 
-  it('synced (no contention): "synced", does not need attention', () => {
+  it('synced: "synced", does not need attention', () => {
 
-    const result: CloudSyncResult = {
-      status: 'synced',
-      patientNumberConflicts: [],
-    }
+    const result: CloudSyncResult = { status: 'synced' }
 
     expect(classifySyncOutcome(result)).toEqual({ type: 'synced' })
     expect(describeSyncOutcome(classifySyncOutcome(result)).needsAttention).toBe(false)
-
-  })
-
-  it('synced with recoveredFromConflict: false: still plain "synced"', () => {
-
-    const result: CloudSyncResult = {
-      status: 'synced',
-      patientNumberConflicts: [],
-      recoveredFromConflict: false,
-    }
-
-    expect(classifySyncOutcome(result)).toEqual({ type: 'synced' })
-
-  })
-
-  it('synced with recoveredFromConflict: true: "synced-after-conflict", does not need attention', () => {
-
-    const result: CloudSyncResult = {
-      status: 'synced',
-      patientNumberConflicts: [],
-      recoveredFromConflict: true,
-    }
-
-    expect(classifySyncOutcome(result)).toEqual({ type: 'synced-after-conflict' })
-    expect(
-      describeSyncOutcome(classifySyncOutcome(result)).needsAttention
-    ).toBe(false)
-
-  })
-
-  it('synced-with-conflicts: "patient-number-conflicts", DOES need attention, regardless of recoveredFromConflict', () => {
-
-    const withoutContention: CloudSyncResult = {
-      status: 'synced-with-conflicts',
-      patientNumberConflicts: [{ patientNumber: 5, patientIds: ['a', 'b'] }],
-    }
-
-    const withContention: CloudSyncResult = {
-      status: 'synced-with-conflicts',
-      patientNumberConflicts: [{ patientNumber: 5, patientIds: ['a', 'b'] }],
-      recoveredFromConflict: true,
-    }
-
-    expect(classifySyncOutcome(withoutContention)).toEqual({
-      type: 'patient-number-conflicts',
-    })
-    expect(classifySyncOutcome(withContention)).toEqual({
-      type: 'patient-number-conflicts',
-    })
-    expect(
-      describeSyncOutcome(classifySyncOutcome(withoutContention)).needsAttention
-    ).toBe(true)
 
   })
 
@@ -91,17 +36,6 @@ describe('classifySyncOutcome - every CloudSyncResult status maps to its own dis
     }
 
     expect(classifySyncOutcome(result)).toEqual({ type: 'save-incomplete' })
-    expect(
-      describeSyncOutcome(classifySyncOutcome(result)).needsAttention
-    ).toBe(false)
-
-  })
-
-  it('contention (retries exhausted): "sync-busy", does not need attention', () => {
-
-    const result: CloudSyncResult = { status: 'contention', attempts: 3 }
-
-    expect(classifySyncOutcome(result)).toEqual({ type: 'sync-busy' })
     expect(
       describeSyncOutcome(classifySyncOutcome(result)).needsAttention
     ).toBe(false)
@@ -339,7 +273,6 @@ describe('SYNC_OUTCOME_COPY - every reason has real, distinct, non-technical wor
         'diverged',
         'local-data-invalid',
         'not-signed-in',
-        'patient-number-conflicts',
         'sign-in-denied',
       ].sort()
     )
@@ -349,9 +282,7 @@ describe('SYNC_OUTCOME_COPY - every reason has real, distinct, non-technical wor
         'offline',
         'onedrive-unavailable',
         'save-incomplete',
-        'sync-busy',
         'synced',
-        'synced-after-conflict',
       ].sort()
     )
 

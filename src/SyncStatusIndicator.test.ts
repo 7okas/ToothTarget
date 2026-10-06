@@ -42,8 +42,6 @@ import {
 } from './syncOutcome'
 
 const SYNCED: SyncOutcomeReason = { type: 'synced' }
-const SYNCED_AFTER_CONFLICT: SyncOutcomeReason = { type: 'synced-after-conflict' }
-const PATIENT_NUMBER_CONFLICTS: SyncOutcomeReason = { type: 'patient-number-conflicts' }
 const NOT_SIGNED_IN: SyncOutcomeReason = { type: 'not-signed-in' }
 const OFFLINE: SyncOutcomeReason = { type: 'offline' }
 
@@ -156,40 +154,6 @@ describe('reduceSyncIndicatorState - a sync attempt just completed (fresh transi
 
   })
 
-  it('a self-resolved sync conflict still shows success styling (auto-hide, no attention)', () => {
-
-    const result = reduceSyncIndicatorState(
-      INITIAL_SYNC_INDICATOR_STATE,
-      'syncing',
-      'idle',
-      SYNCED_AFTER_CONFLICT
-    )
-
-    expect(result.icon).toBe('success')
-    expect(result.text).toEqual({
-      label: describeSyncOutcome(SYNCED_AFTER_CONFLICT).label,
-      autoHide: true,
-    })
-
-  })
-
-  it('an outcome needing attention on an otherwise-successful sync shows the attention icon, not success', () => {
-
-    const result = reduceSyncIndicatorState(
-      INITIAL_SYNC_INDICATOR_STATE,
-      'syncing',
-      'idle',
-      PATIENT_NUMBER_CONFLICTS
-    )
-
-    expect(result.icon).toBe('attention')
-    expect(result.text).toEqual({
-      label: describeSyncOutcome(PATIENT_NUMBER_CONFLICTS).label,
-      autoHide: false,
-    })
-
-  })
-
   it('an outcome needing attention on a failed sync shows the attention icon, not the plain failure icon', () => {
 
     const result = reduceSyncIndicatorState(
@@ -236,10 +200,7 @@ describe('reduceSyncIndicatorState - every classified outcome maps to a distinct
   */
   const ALL_OUTCOME_TYPES: SyncOutcomeType[] = [
     'synced',
-    'synced-after-conflict',
-    'patient-number-conflicts',
     'save-incomplete',
-    'sync-busy',
     'cloud-data-corrupted',
     'local-data-invalid',
     'not-signed-in',
@@ -442,7 +403,6 @@ describe('canReviewDifferencesFromBadge (Phase 6) - when the badge opens the res
     for (const type of [
       'not-signed-in',
       'cloud-data-corrupted',
-      'patient-number-conflicts',
       'local-data-invalid',
       'sign-in-denied',
     ] as const) {

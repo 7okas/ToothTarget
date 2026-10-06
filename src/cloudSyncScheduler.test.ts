@@ -57,15 +57,9 @@ async function flushMicrotasks(times = 4): Promise<void> {
 beforeEach(() => {
   __resetCloudSyncSchedulerForTests()
   mockedSyncCloudNow.mockReset()
-  mockedSyncCloudNow.mockResolvedValue({
-    status: 'synced',
-    patientNumberConflicts: [],
-  })
+  mockedSyncCloudNow.mockResolvedValue({ status: 'synced' })
   mockedPullCloudSnapshot.mockReset()
-  mockedPullCloudSnapshot.mockResolvedValue({
-    status: 'synced',
-    patientNumberConflicts: [],
-  })
+  mockedPullCloudSnapshot.mockResolvedValue({ status: 'synced' })
   mockedMaybeRotateBackup.mockReset()
   mockedMaybeRotateBackup.mockResolvedValue(undefined)
 })
@@ -139,7 +133,7 @@ describe('requestCloudSync - changes during an active sync', () => {
     await flushMicrotasks()
     expect(mockedSyncCloudNow).toHaveBeenCalledTimes(1)
 
-    resolveFirstSync({ status: 'synced', patientNumberConflicts: [] })
+    resolveFirstSync({ status: 'synced' })
 
     await flushMicrotasks()
 
@@ -176,7 +170,7 @@ describe('requestCloudSync - changes during an active sync', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    resolveFirstSync({ status: 'synced', patientNumberConflicts: [] })
+    resolveFirstSync({ status: 'synced' })
     await flushMicrotasks()
 
     expect(maxConcurrentCalls).toBe(1)
@@ -221,7 +215,6 @@ describe('requestCloudSync - failure handling', () => {
 
     for (const status of [
       { status: 'graph-error', detail: 'x' } as const,
-      { status: 'contention', attempts: 3 } as const,
       { status: 'validation-failed', detail: 'x' } as const,
       { status: 'permission-denied', detail: 'x' } as const,
     ]) {
@@ -229,10 +222,7 @@ describe('requestCloudSync - failure handling', () => {
       __resetCloudSyncSchedulerForTests()
       mockedSyncCloudNow.mockReset()
       mockedSyncCloudNow.mockResolvedValueOnce(status)
-      mockedSyncCloudNow.mockResolvedValueOnce({
-        status: 'synced',
-        patientNumberConflicts: [],
-      })
+      mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
       requestCloudSync()
       await flushMicrotasks()
@@ -438,7 +428,7 @@ describe('cloud sync status', () => {
 
     expect(getCloudSyncStatus()).toBe('syncing')
 
-    resolveSync({ status: 'synced', patientNumberConflicts: [] })
+    resolveSync({ status: 'synced' })
 
     await flushMicrotasks()
 
@@ -473,10 +463,7 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
 
   it('classifies a clean success as "synced"', async () => {
 
-    mockedSyncCloudNow.mockResolvedValueOnce({
-      status: 'synced',
-      patientNumberConflicts: [],
-    })
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
     requestCloudSync()
     await flushMicrotasks()
@@ -533,10 +520,7 @@ describe('lastSyncOutcome (Phase 6 - failure differentiation)', () => {
 
     expect(getLastSyncOutcome()).toEqual({ type: 'not-signed-in' })
 
-    mockedSyncCloudNow.mockResolvedValueOnce({
-      status: 'synced',
-      patientNumberConflicts: [],
-    })
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
     requestCloudSync()
     await flushMicrotasks()
@@ -590,24 +574,7 @@ describe('localDataVersion (UI refresh signal)', () => {
 
   it('bumps on a clean "synced" result', async () => {
 
-    mockedSyncCloudNow.mockResolvedValueOnce({
-      status: 'synced',
-      patientNumberConflicts: [],
-    })
-
-    requestCloudSync()
-    await flushMicrotasks()
-
-    expect(getLocalDataVersion()).toBe(1)
-
-  })
-
-  it('bumps on "synced-with-conflicts" too - commitLocalState() also ran for that outcome', async () => {
-
-    mockedSyncCloudNow.mockResolvedValueOnce({
-      status: 'synced-with-conflicts',
-      patientNumberConflicts: [],
-    })
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
     requestCloudSync()
     await flushMicrotasks()
@@ -643,10 +610,7 @@ describe('localDataVersion (UI refresh signal)', () => {
 
   it('bumps once per successful attempt, not once per requestCloudSync() call coalesced into it', async () => {
 
-    mockedSyncCloudNow.mockResolvedValueOnce({
-      status: 'synced',
-      patientNumberConflicts: [],
-    })
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
     requestCloudSync()
     requestCloudSync()
@@ -659,10 +623,7 @@ describe('localDataVersion (UI refresh signal)', () => {
 
   it('notifies subscribers exactly when it bumps', async () => {
 
-    mockedSyncCloudNow.mockResolvedValueOnce({
-      status: 'synced',
-      patientNumberConflicts: [],
-    })
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
     const listener = vi.fn()
     const unsubscribe = subscribeLocalDataVersion(listener)
@@ -695,10 +656,7 @@ describe('localDataVersion (UI refresh signal)', () => {
 
   it('is reset to 0 by __resetCloudSyncSchedulerForTests', async () => {
 
-    mockedSyncCloudNow.mockResolvedValueOnce({
-      status: 'synced',
-      patientNumberConflicts: [],
-    })
+    mockedSyncCloudNow.mockResolvedValueOnce({ status: 'synced' })
 
     requestCloudSync()
     await flushMicrotasks()

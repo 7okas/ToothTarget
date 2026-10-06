@@ -7,8 +7,6 @@ import {
   type CloudSyncDocument,
 } from './cloudSync'
 
-import type { PatientNumberConflict } from './patientNumberConflicts'
-
 import {
   readCloudSyncDocument,
   writeCloudSyncDocument,
@@ -26,9 +24,8 @@ import { recordDeviceSyncSuccess } from './deviceSyncTracking'
 
   This is the one explicit entry point (syncCloudNow()) that connects
   every previous layer into a single safe synchronization transaction:
-  Phase 1's schema/validator (cloudSync.ts), Phase 3's pure merge
-  engine (cloudMerge.ts), Phase 4's local conflict store
-  (patientNumberConflicts.ts), and Phase 5's transport (cloudStorage.ts).
+  Phase 1's schema/validator (cloudSync.ts) and Phase 5's transport
+  (cloudStorage.ts).
 
   Automatic background sync is real and in production: syncCloudNow()
   is called through cloudSyncScheduler.ts's requestCloudSync()/
@@ -758,7 +755,7 @@ export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
 
   }
 
-  return { status: 'synced', patientNumberConflicts: [] }
+  return { status: 'synced' }
 
 }
 
@@ -991,7 +988,7 @@ export async function pullCloudSnapshot(): Promise<CloudSyncResult> {
 
     }
 
-    return { status: 'synced', patientNumberConflicts: [] }
+    return { status: 'synced' }
 
   }
 
@@ -1114,37 +1111,9 @@ export function replaceLocalSyncedData(document: CloudSyncDocument): void {
   RESULT TYPE
 */
 
-/*
-  recoveredFromConflict (Phase 6) - optional, and only ever set true by
-  performSync() itself below, never by any other construction site
-  (including every existing test that builds a literal CloudSyncResult
-  for mocking purposes, which is exactly why this is optional rather
-  than required - see this file's own comment where it's set for the
-  full reasoning). True means this attempt only succeeded after one or
-  more earlier attempts in the SAME performSync() call hit a 412/409
-  ETag conflict (writeCloudSyncDocument() returning
-  'precondition-failed') and this call transparently re-read/re-merged/
-  retried - a real event worth surfacing distinctly (see syncOutcome.ts),
-  since "sync attempt succeeded and there was never any contention" and
-  "sync attempt succeeded after quietly resolving a conflict with
-  another device" are different enough stories to tell the dentist
-  apart, even though the RESULT (a fully synced, fully merged document)
-  is identical either way - this flag changes nothing about what gets
-  synced or how, only what gets reported afterward.
-*/
 export type CloudSyncResult =
-  | {
-      status: 'synced'
-      patientNumberConflicts: PatientNumberConflict[]
-      recoveredFromConflict?: boolean
-    }
-  | {
-      status: 'synced-with-conflicts'
-      patientNumberConflicts: PatientNumberConflict[]
-      recoveredFromConflict?: boolean
-    }
+  | { status: 'synced' }
   | { status: 'cloud-committed-locally-pending'; detail: string }
-  | { status: 'contention'; attempts: number }
   | {
       status: 'cloud-invalid'
       detail: string
