@@ -1141,3 +1141,122 @@ describe('calculateAppointmentDurationEstimate', () => {
   })
 
 })
+
+describe('applyStatisticsFilters - checked treatments (treatmentIds)', () => {
+
+  function timed(
+    id: string,
+    overrides: Partial<SavedTreatment>,
+    actualSeconds: number[]
+  ): SavedTreatment {
+    const names = [ACCESS, CLEANING_SHAPING, OBTURATION]
+    return makeTreatment({
+      id,
+      phaseRecords: names.map((name, index) =>
+        phaseRecord(name, 300, actualSeconds[index])
+      ),
+      ...overrides,
+    })
+  }
+
+  const t1 = timed('t1', { toothId: '16', procedureId: 'rct', procedureName: 'RCT', templateId: 'rct-molar', date: '2026-01-10T10:00:00.000Z' }, [250, 400, 280])
+  const t2 = timed('t2', { toothId: '26', procedureId: 'rct', procedureName: 'RCT', templateId: 'rct-molar', date: '2026-01-20T10:00:00.000Z' }, [320, 520, 410])
+  const t3 = timed('t3', { toothId: '36', procedureId: 'rct', procedureName: 'RCT', templateId: 'rct-molar', date: '2026-02-03T10:00:00.000Z' }, [200, 300, 250])
+  const t4 = timed('t4', { toothId: '24', procedureId: 'filling', procedureName: 'Filling', templateId: 'class-ii', date: '2026-02-10T10:00:00.000Z' }, [100, 200, 150])
+  const t5 = timed('t5', { toothId: '11', procedureId: 'filling', procedureName: 'Filling', templateId: 'class-iii', date: '2026-03-01T10:00:00.000Z' }, [90, 180, 120])
+  const all = [t1, t2, t3, t4, t5]
+
+  it('keeps exactly the checked treatments, in their original order', () => {
+
+    const result = applyStatisticsFilters(all, {
+      ...ALL_TREATMENTS_FILTER,
+      treatmentIds: ['t4', 't1', 't3'],
+    })
+
+    expect(result.map(t => t.id)).toEqual(['t1', 't3', 't4'])
+
+  })
+
+  it('null or missing means unrestricted; an empty list means nothing is checked', () => {
+
+    expect(
+      applyStatisticsFilters(all, { ...ALL_TREATMENTS_FILTER, treatmentIds: null })
+    ).toEqual(all)
+
+    expect(applyStatisticsFilters(all, ALL_TREATMENTS_FILTER)).toEqual(all)
+
+    expect(
+      applyStatisticsFilters(all, { ...ALL_TREATMENTS_FILTER, treatmentIds: [] })
+    ).toEqual([])
+
+  })
+
+  it('ids with no matching treatment (eg. deleted ones) are ignored without error', () => {
+
+    const result = applyStatisticsFilters(all, {
+      ...ALL_TREATMENTS_FILTER,
+      treatmentIds: ['t2', 'deleted-treatment', 'never-existed'],
+    })
+
+    expect(result.map(t => t.id)).toEqual(['t2'])
+
+  })
+
+  it('still ANDs with the other filters when both are given', () => {
+
+    const result = applyStatisticsFilters(all, {
+      ...ALL_TREATMENTS_FILTER,
+      treatmentIds: ['t1', 't2', 't4'],
+      procedureIds: ['rct'],
+    })
+
+    expect(result.map(t => t.id)).toEqual(['t1', 't2'])
+
+  })
+
+  it('a checked list gives EXACTLY the same numbers as filtering the same list another way', () => {
+
+    // The same three RCT molars, selected two other ways:
+    //   (a) a plain id filter done by hand
+    //   (b) the existing preset filters (procedure + tooth + date range)
+    const checked = applyStatisticsFilters(all, {
+      ...ALL_TREATMENTS_FILTER,
+      treatmentIds: ['t1', 't2', 't3'],
+    })
+
+    const byHand = all.filter(t => ['t1', 't2', 't3'].includes(t.id))
+
+    const byPresets = applyStatisticsFilters(all, {
+      procedureIds: ['rct'],
+      templateIds: ['rct-molar'],
+      toothIds: ['16', '26', '36'],
+      dateRange: {
+        from: '2026-01-01T00:00:00.000Z',
+        to: '2026-02-28T23:59:59.999Z',
+      },
+    })
+
+    expect(checked).toEqual(byHand)
+    expect(checked).toEqual(byPresets)
+
+    // Every calculation the screen runs on its filtered list gives the
+    // identical answer, whichever way the list was produced.
+    for (const other of [byHand, byPresets]) {
+      expect(calculateTreatmentStatistics(checked)).toEqual(calculateTreatmentStatistics(other))
+      expect(calculateProcedureStatistics(checked)).toEqual(calculateProcedureStatistics(other))
+      expect(calculatePhaseStatistics(checked)).toEqual(calculatePhaseStatistics(other))
+      expect(calculateTimeLossInsights(checked, 1)).toEqual(calculateTimeLossInsights(other, 1))
+      expect(calculateOvertimeStatistics(checked)).toEqual(calculateOvertimeStatistics(other))
+      expect(calculateTimeTrend(checked)).toEqual(calculateTimeTrend(other))
+    }
+
+    // And the figures themselves are the expected ones for those three.
+    const stats = calculateTreatmentStatistics(checked)
+    expect(stats.completedCount).toBe(3)
+    expect(stats.averageActualDuration).toBeCloseTo((930 + 1250 + 750) / 3)
+    expect(stats.fastestTreatment?.id).toBe('t3')
+    expect(stats.slowestTreatment?.id).toBe('t2')
+
+  })
+
+})

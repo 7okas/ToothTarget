@@ -61,6 +61,19 @@ export type StatisticsFilters = {
   templateIds: string[] | null
   toothIds: string[] | null
   dateRange: DateRange | null
+  /*
+    CHECKED-TREATMENTS MODE: when present (not undefined/null), only
+    treatments whose id is in this list pass - everything else about
+    the filter still applies on top (AND), so a checked list can be
+    narrowed further, but normally it is used alone. Ids with no
+    matching treatment (eg. a deleted one) simply match nothing; an
+    EMPTY list matches no treatment at all (it is a real selection of
+    nothing, unlike null/undefined which mean "unrestricted").
+    Optional so every existing StatisticsFilters literal stays valid.
+    Because this is just one more filter on the same list, a checked
+    selection feeds exactly the same calculations as the presets.
+  */
+  treatmentIds?: string[] | null
   // Reserved for future filters - intentionally unimplemented for now:
   // patientId?: string | null
 }
@@ -77,7 +90,16 @@ export function applyStatisticsFilters(
   filters: StatisticsFilters
 ): SavedTreatment[] {
 
+  const checkedIds =
+    filters.treatmentIds === undefined || filters.treatmentIds === null
+      ? null
+      : new Set(filters.treatmentIds)
+
   return treatments.filter(treatment => {
+
+    if (checkedIds !== null && !checkedIds.has(treatment.id)) {
+      return false
+    }
 
     if (
       filters.procedureIds !== null &&
