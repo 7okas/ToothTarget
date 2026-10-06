@@ -5,6 +5,7 @@ import BackButton from './BackButton'
 import MicrosoftAccountSection from './MicrosoftAccountSection'
 import TreatmentSummaryCard from './TreatmentSummaryCard'
 import StatisticsScreen from './StatisticsScreen'
+import AddPhaseForm from './AddPhaseForm'
 import ToothChart from './ToothChart'
 import { formatTime, formatDate } from './format'
 import { getToothById, getToothLabel, resolveLegacyToothId } from './teeth'
@@ -9332,75 +9333,25 @@ const patientTreatments =
 
               {optionsView === 'addPhase' && (
 
-                <>
-
-                  <h2>
-                    Add Phase
-                  </h2>
-
-                  <p>
-                    This phase is added to this treatment only - the
-                    procedure template is not changed.
-                  </p>
-
-                  <input
-                    type="text"
-                    className="template-name-input"
-                    placeholder="Phase name..."
-                    value={newPhaseName}
-                    onChange={event =>
-                      setNewPhaseName(event.target.value)
-                    }
-                    autoFocus
-                  />
-
-                  <div className="add-phase-duration-row">
-
-                    <label>
-                      Duration (minutes)
-                    </label>
-
-                    <input
-                      type="number"
-                      min={1}
-                      value={newPhaseMinutes}
-                      onChange={event =>
-                        setNewPhaseMinutes(event.target.value)
-                      }
-                    />
-
-                  </div>
-
-                  <div className="modal-actions modal-actions-stacked">
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        addPhaseToTreatment(
-                          newPhaseName,
-                          Number(newPhaseMinutes)
-                        )
-                        setShowOptionsMenu(false)
-                      }}
-                      disabled={
-                        !newPhaseName.trim() ||
-                        !(Number(newPhaseMinutes) > 0)
-                      }
-                    >
-                      Add Phase
-                    </button>
-
-                    <button
-                      type="button"
-                      className="modal-cancel-button"
-                      onClick={() => setOptionsView('menu')}
-                    >
-                      Back
-                    </button>
-
-                  </div>
-
-                </>
+                <AddPhaseForm
+                  savedTreatments={savedTreatments}
+                  templates={templates}
+                  activeTreatments={
+                    activeTreatment
+                      ? [activeTreatment, ...incompleteTreatments]
+                      : incompleteTreatments
+                  }
+                  currentProcedureId={activeTreatment?.procedureId}
+                  name={newPhaseName}
+                  onNameChange={setNewPhaseName}
+                  minutes={newPhaseMinutes}
+                  onMinutesChange={setNewPhaseMinutes}
+                  onAdd={(name, minutes) => {
+                    addPhaseToTreatment(name, minutes)
+                    setShowOptionsMenu(false)
+                  }}
+                  onBack={() => setOptionsView('menu')}
+                />
 
               )}
 
