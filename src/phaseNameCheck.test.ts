@@ -88,6 +88,15 @@ describe('evaluatePhaseName - suggestions', () => {
     })
   })
 
+  it('"Acces" (a missing double "s") suggests "Access"', () => {
+    expect(evaluatePhaseName('Acces', rctPool)).toMatchObject({
+      kind: 'suggest',
+      suggestion: 'Access',
+      tier: 1,
+      usedTimes: 12,
+    })
+  })
+
   it('a different case is "case-or-spacing"', () => {
     const hint = evaluatePhaseName('access', rctPool)
     expect(hint).toMatchObject({ kind: 'suggest', suggestion: 'Access', tier: 0, reason: 'case-or-spacing' })

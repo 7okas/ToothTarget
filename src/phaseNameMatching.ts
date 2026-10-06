@@ -30,7 +30,10 @@
    guards      (a name that passes none of these is not warned about)
      digits      the digits in the two names differ ("Coat 1" / "Coat 2")
      plural-s    the names differ only by a trailing "s"
-                 ("Rinse" / "Rinses")
+                 ("Rinse" / "Rinses", "Coat" / "Coats") - EXCEPT when the
+                 longer name ends in a double "s", where that "s" is part
+                 of the word, not a plural ("Access" / "Acces",
+                 "Process" / "Proces"): those go on to the tiers below
      short       the typed name has 4 letters or fewer: only Tier 0 applies
    TIER 1      (typed name 5+ letters) equal once repeated letters are
                collapsed ("Acesss" / "Access" - both become "aces"), or
@@ -193,7 +196,16 @@ export function comparePhaseNames(
     return { kind: 'suppressed', guard: 'digits', distance }
   }
 
-  if (na + 's' === nb || nb + 's' === na) {
+  /*
+    Only a real plural is ignored. When the longer name ends in "ss"
+    ("access", "process", "class") the missing letter is a slip, so the
+    pair is not treated as a plural and falls through to the tiers.
+  */
+  const differsByTrailingS = na + 's' === nb || nb + 's' === na
+
+  const longer = na.length > nb.length ? na : nb
+
+  if (differsByTrailingS && !longer.endsWith('ss')) {
     return { kind: 'suppressed', guard: 'plural-s', distance }
   }
 

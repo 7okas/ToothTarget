@@ -133,8 +133,10 @@ describe('evaluateEditorRows - names in the same template', () => {
     expect(hints[0].kind).toBe('none')
   })
 
-  it('NOTE: "Acces" (one missing s) is NOT flagged - it differs from "Access" only by a trailing "s", which the agreed plural guard suppresses', () => {
-    expect(kinds(evaluateEditorRows(['Access', 'Acces'], empty, []))).toEqual(['none', 'none'])
+  it('flags "Acces" (one missing s) in a later row when an earlier row says "Access" - a double "s" is not a plural', () => {
+    const hints = evaluateEditorRows(['Access', 'Shaping', 'Obturation', 'Acces'], empty, [])
+    expect(kinds(hints)).toEqual(['none', 'none', 'none', 'suggest'])
+    expect(hints[3]).toMatchObject({ typed: 'Acces', suggestion: 'Access' })
   })
 
   it('a row never flags against itself', () => {

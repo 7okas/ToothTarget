@@ -199,6 +199,50 @@ describe('comparePhaseNames - guards (close but NOT flagged)', () => {
 
 })
 
+describe('comparePhaseNames - the plural-s guard and names ending in a double "s"', () => {
+
+  it('"Acces" vs "Access" is a typo, not a plural: it is flagged (both directions)', () => {
+    expect(comparePhaseNames('Acces', 'Access')).toEqual({ kind: 'match', tier: 1, distance: 1 })
+    expect(comparePhaseNames('Access', 'Acces')).toEqual({ kind: 'match', tier: 1, distance: 1 })
+  })
+
+  it('"Proces" vs "Process" is flagged (both directions)', () => {
+    expect(comparePhaseNames('Proces', 'Process')).toEqual({ kind: 'match', tier: 1, distance: 1 })
+    expect(comparePhaseNames('Process', 'Proces')).toEqual({ kind: 'match', tier: 1, distance: 1 })
+  })
+
+  it('"Class" vs "Clas": typing the 5-letter "Class" is flagged', () => {
+    expect(comparePhaseNames('Class', 'Clas')).toEqual({ kind: 'match', tier: 1, distance: 1 })
+  })
+
+  it('"Clas" vs "Class": typing the 4-letter "Clas" is no longer stopped by the plural guard, but the short-name guard (4 letters or fewer) still applies', () => {
+    expect(comparePhaseNames('Clas', 'Class')).toEqual({ kind: 'suppressed', guard: 'short', distance: 1 })
+  })
+
+  it('a tripled "s" is flagged too', () => {
+    expect(comparePhaseNames('Processs', 'Process').kind).toBe('match')
+    expect(comparePhaseNames('Process', 'Processs').kind).toBe('match')
+  })
+
+  it('every other trailing "s" difference stays suppressed, both directions', () => {
+    for (const [a, b] of [
+      ['Rinse', 'Rinses'],
+      ['Coat', 'Coats'],
+      ['Irrigation', 'Irrigations'],
+      ['Bond', 'Bonds'],
+      ['Shaping', 'Shapings'],
+    ]) {
+      expect(comparePhaseNames(a, b)).toMatchObject({ kind: 'suppressed', guard: 'plural-s' })
+      expect(comparePhaseNames(b, a)).toMatchObject({ kind: 'suppressed', guard: 'plural-s' })
+    }
+  })
+
+  it('a name plus a second trailing "s" is a typo, not a plural (Bonus / Bonuss)', () => {
+    expect(comparePhaseNames('Bonuss', 'Bonus').kind).toBe('match')
+  })
+
+})
+
 describe('comparePhaseNames - the examples from the plan', () => {
 
   const wouldTrigger: [string, string][] = [
@@ -209,6 +253,7 @@ describe('comparePhaseNames - the examples from the plan', () => {
     ['Working Lenght', 'Working Length'],
     ['Glide-Path', 'Glide Path'],
     ['Cleaning and Shapping', 'Cleaning & Shaping'],
+    ['Acces', 'Access'],
   ]
 
   const wouldNot: [string, string][] = [

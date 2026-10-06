@@ -134,6 +134,25 @@ describe('auditPhaseNames - section 2: pairs the rules would flag', () => {
     ])
   })
 
+  it('uses the same plural rule as the live check: Access/Acces is flagged, Rinse/Rinses is suppressed', () => {
+    const report = auditPhaseNames(
+      input([
+        ...many(10, ['Access', 'Rinse']),
+        ...many(1, ['Acces', 'Rinses']),
+      ])
+    )
+    expect(report.flagged).toEqual([
+      {
+        tier: 1,
+        distance: 1,
+        typed: { name: 'Acces', savedCount: 1, templateCount: 0 },
+        suggestion: { name: 'Access', savedCount: 10, templateCount: 0 },
+      },
+    ])
+    expect(report.suppressed).toHaveLength(1)
+    expect(report.suppressed[0]).toMatchObject({ guard: 'plural-s' })
+  })
+
   it('finds Tier 2 pairs too', () => {
     const report = auditPhaseNames(input([...many(8, ['Obturation']), ...many(2, ['Obturaton'])]))
     expect(report.flagged[0]).toMatchObject({ tier: 2, distance: 1 })

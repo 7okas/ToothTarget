@@ -362,7 +362,7 @@ export function formatAuditReport(report: AuditReport): string[] {
 
   lines.push('')
   lines.push(
-    'Guards: short = typed name of 4 letters or fewer; digits = the numbers differ; plural-s = only a trailing "s" differs; length = too few letters for that many edits.'
+    'Guards: short = typed name of 4 letters or fewer; digits = the numbers differ; plural-s = only a trailing "s" differs (but not when the longer name ends in a double "s", like Access/Acces); length = too few letters for that many edits.'
   )
 
   return lines
