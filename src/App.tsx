@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import './App.css'
 import logo from './assets/logo.png'
 import BackButton from './BackButton'
@@ -6,6 +6,21 @@ import MicrosoftAccountSection from './MicrosoftAccountSection'
 import TreatmentSummaryCard from './TreatmentSummaryCard'
 import StatisticsScreen from './StatisticsScreen'
 import AddPhaseForm from './AddPhaseForm'
+import PhaseNameHint from './PhaseNameHint'
+import { rememberPhaseNameKeptAsTyped } from './phaseNameDecisions'
+import {
+  CHECK_PHASE_NAMES_MESSAGE,
+  NO_REQUESTED_TEXTS,
+  buildTemplateEditorPool,
+  decideTemplateSave,
+  evaluateEditorRows,
+  exemptNamesOf,
+  forgetHintFor,
+  hintsToShow,
+  requestHintsFor,
+  undecidedRowIndexes,
+  type RequestedTexts,
+} from './templateEditorHints'
 import ToothChart from './ToothChart'
 import { formatTime, formatDate } from './format'
 import { getToothById, getToothLabel, resolveLegacyToothId } from './teeth'
@@ -379,6 +394,22 @@ export type SavedTreatment = {
     fact, same spirit as Patient.createdAt's own backfill.
   */
   updatedAt: string
+}
+
+/*
+  Template editor phase-name hints (Phase 9). Everything decided about the
+  rows lives in templateEditorHints.ts; this is only the little bit of
+  screen state those helpers need.
+*/
+type TemplateHintState = {
+  /* The draft this belongs to (reset whenever the editor closes). */
+  draftId: string
+  /* Names the template already held when the editor opened: never hinted. */
+  exempt: string[]
+  /* Row texts a hint has been asked for (field left, or Save tapped). */
+  requested: RequestedTexts
+  /* Save was tapped and blocked: show "Check the highlighted phase names". */
+  saveAttempted: boolean
 }
 
 type TemplateDraft = {
@@ -3229,6 +3260,18 @@ const [conflictResolutionError, setConflictResolutionError] =
 
   const [templateDraft, setTemplateDraft] =
     useState<TemplateDraft | null>(null)
+
+  const [templateHintState, setTemplateHintState] =
+    useState<TemplateHintState | null>(null)
+
+  /*
+    Forget the hint state as soon as the editor is closed, so the next
+    time ANY template (even the same one) is opened it starts clean.
+    Adjusted during render rather than in an effect.
+  */
+  if (templateDraft === null && templateHintState !== null) {
+    setTemplateHintState(null)
+  }
 
   const [duplicateTemplateWarning, setDuplicateTemplateWarning] =
     useState<ProcedureTemplate | null>(null)
@@ -7347,6 +7390,62 @@ async function openPatient(
 
   }
 
+  /*
+    The editor's phase-name hints for a draft: its rows' texts, the screen
+    state (a fresh one if this draft has none yet) and one hint per row.
+    Used by the editor screen and by the Save gate, so both always agree.
+  */
+  function templateEditorHintContext(draft: TemplateDraft) {
+
+    const names = draft.phases.map(phase => phase.name)
+
+    const state: TemplateHintState =
+      templateHintState && templateHintState.draftId === draft.id
+        ? templateHintState
+        : {
+            draftId: draft.id,
+            exempt: exemptNamesOf(names),
+            requested: NO_REQUESTED_TEXTS,
+            saveAttempted: false,
+          }
+
+    const pool = buildTemplateEditorPool({
+      savedTreatments,
+      templates,
+      activeTreatments: activeTreatment
+        ? [activeTreatment, ...incompleteTreatments]
+        : incompleteTreatments,
+      editedTemplateId: draft.id,
+    })
+
+    return {
+      names,
+      state,
+      rowHints: evaluateEditorRows(names, pool, state.exempt),
+    }
+
+  }
+
+  function updateTemplateHintRequested(
+    change: (requested: RequestedTexts) => RequestedTexts
+  ) {
+
+    setTemplateHintState(previous => {
+
+      if (!previous) {
+        return previous
+      }
+
+      const requested = change(previous.requested)
+
+      return requested === previous.requested
+        ? previous
+        : { ...previous, requested }
+
+    })
+
+  }
+
   function saveTemplateDraft() {
 
     if (!templateDraft) {
@@ -7361,6 +7460,38 @@ async function openPatient(
       templateDraft.phases.length === 0
     ) {
       return
+    }
+
+    /*
+      PHASE-NAME GATE (Phase 9): every row is checked, including rows
+      never left. If any still has an undecided hint, nothing is saved:
+      those rows' hints are shown, the message appears and the first one
+      is scrolled into view. Everything below is exactly as before.
+    */
+
+    const hintContext = templateEditorHintContext(templateDraft)
+
+    const gate = decideTemplateSave(hintContext.rowHints)
+
+    if (!gate.allowed) {
+
+      setTemplateHintState({
+        ...hintContext.state,
+        requested: requestHintsFor(
+          hintContext.state.requested,
+          gate.rows.map(row => hintContext.names[row])
+        ),
+        saveAttempted: true,
+      })
+
+      requestAnimationFrame(() => {
+        document
+          .getElementById(`template-phase-row-${gate.firstRow}`)
+          ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      })
+
+      return
+
     }
 
     const cleanedPhases =
@@ -7544,6 +7675,20 @@ async function openPatient(
       procedureKey: original.procedureKey,
       typeId: original.typeId,
     })
+
+    /* The built-in names just restored are known names, not typos. */
+    setTemplateHintState(previous =>
+      previous
+        ? {
+            ...previous,
+            exempt: exemptNamesOf([
+              ...previous.exempt,
+              ...original.phases.map(phase => phase.name),
+            ]),
+            requested: NO_REQUESTED_TEXTS,
+          }
+        : previous
+    )
 
     setShowRestoreDefaultConfirm(false)
 
@@ -10272,6 +10417,23 @@ const patientTreatments =
         templateDraft.typeId
       )
 
+    const hintContext = templateEditorHintContext(templateDraft)
+
+    if (templateHintState?.draftId !== templateDraft.id) {
+      setTemplateHintState(hintContext.state)
+    }
+
+    const shownHints =
+      hintsToShow(
+        hintContext.names,
+        hintContext.rowHints,
+        hintContext.state.requested
+      )
+
+    const showCheckNamesMessage =
+      hintContext.state.saveAttempted &&
+      undecidedRowIndexes(hintContext.rowHints).length > 0
+
     return (
 
       <div className="app">
@@ -10316,18 +10478,32 @@ const patientTreatments =
 
           {templateDraft.phases.map((phase, index) => (
 
-            <div className="template-phase-row" key={index}>
+            <Fragment key={index}>
+
+            <div
+              className="template-phase-row"
+              id={`template-phase-row-${index}`}
+            >
 
               <input
                 type="text"
                 placeholder="Phase name"
                 value={phase.name}
                 onChange={
-                  event =>
+                  event => {
+                    updateTemplateHintRequested(requested =>
+                      forgetHintFor(requested, phase.name)
+                    )
                     updateDraftPhaseName(
                       index,
                       event.target.value
                     )
+                  }
+                }
+                onBlur={() =>
+                  updateTemplateHintRequested(requested =>
+                    requestHintsFor(requested, [phase.name])
+                  )
                 }
               />
 
@@ -10367,12 +10543,42 @@ const patientTreatments =
               <button
                 type="button"
                 className="small-button"
-                onClick={() => removeDraftPhase(index)}
+                onClick={() => {
+                  updateTemplateHintRequested(requested =>
+                    forgetHintFor(requested, phase.name)
+                  )
+                  removeDraftPhase(index)
+                }}
               >
                 ×
               </button>
 
             </div>
+
+            <PhaseNameHint
+              hint={shownHints[index]}
+              onUseSuggestion={() => {
+                const hint = shownHints[index]
+                if (hint.kind === 'suggest') {
+                  updateTemplateHintRequested(requested =>
+                    forgetHintFor(requested, phase.name)
+                  )
+                  updateDraftPhaseName(index, hint.suggestion)
+                }
+              }}
+              onKeepAsTyped={() => {
+                const hint = shownHints[index]
+                if (hint.kind === 'suggest') {
+                  rememberPhaseNameKeptAsTyped(hint.typed, hint.suggestion)
+                  // The memory is not React state: nudge the screen to redraw.
+                  setTemplateHintState(previous =>
+                    previous ? { ...previous } : previous
+                  )
+                }
+              }}
+            />
+
+            </Fragment>
 
           ))}
 
@@ -10386,6 +10592,12 @@ const patientTreatments =
           <p className="template-total">
             Total: {totalMinutes} min
           </p>
+
+          {showCheckNamesMessage && (
+            <p className="phase-name-check-message" role="alert">
+              {CHECK_PHASE_NAMES_MESSAGE}
+            </p>
+          )}
 
           <button
             type="button"
