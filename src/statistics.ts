@@ -15,7 +15,12 @@ import { getPatientCaseType } from './patientCaseType'
   here is sample/fake data.
 */
 
-const MIN_SAMPLE_SIZE = 3
+/*
+  The one shared "too few treatments to draw a conclusion" threshold:
+  every averaged statistic here, and the month-by-month table's "low
+  sample" flag, use it.
+*/
+export const MIN_SAMPLE_SIZE = 3
 
 function mean(values: number[]): number | null {
 
@@ -497,6 +502,140 @@ export function calculateTreatmentStatistics(
       calculateSlowestTreatment(treatments),
 
   }
+
+}
+
+
+/*
+  MONTH-BY-MONTH STATISTICS (Phase 8)
+
+  One row per LOCAL calendar month (the device's own calendar, the same
+  way custom date ranges now work), oldest first, built from the very
+  same calculateTreatmentStatistics() as the overview - so a month's
+  numbers are exactly what the overview would show for that month's
+  treatments.
+
+  FILTERS: the caller's procedure / tooth / template (and checked-id)
+  filters apply; the DATE-RANGE filter is deliberately ignored here
+  (the span below decides which months are shown), so picking a date
+  preset can never blank out the very months being compared. Case-type
+  filtering is done upstream by the caller, exactly as for the overview.
+
+  SPAN: 'last6' / 'last12' are the 6 / 12 calendar months ending with
+  the month of `now` (the current month included), and EVERY month in
+  that window gets a row even when it had no treatments (count 0, empty
+  averages, flagged low-sample) so gaps stay visible. 'all' runs from
+  the month of the earliest treatment to the month of the latest one
+  (gaps in between included); no treatments means no rows.
+
+  A month with fewer than MIN_SAMPLE_SIZE treatments is flagged
+  lowSample: its averages are shown but should be read as indicative
+  only. Treatments with an unreadable date are skipped.
+*/
+
+export type MonthlySpan = 'last6' | 'last12' | 'all'
+
+export type MonthlyStatistic = {
+  /* "YYYY-MM", unique and sortable. */
+  key: string
+  year: number
+  /* 1-12 */
+  month: number
+  treatmentCount: number
+  averageActualDuration: number | null
+  averageExpectedDuration: number | null
+  percentWithinTarget: number | null
+  lowSample: boolean
+}
+
+function monthKeyFor(monthIndex: number): { key: string; year: number; month: number } {
+
+  const year = Math.floor(monthIndex / 12)
+  const month = (monthIndex % 12) + 1
+
+  return {
+    key: `${year}-${String(month).padStart(2, '0')}`,
+    year,
+    month,
+  }
+
+}
+
+export function calculateMonthlyStatistics(
+  treatments: SavedTreatment[],
+  filters: StatisticsFilters,
+  span: MonthlySpan,
+  now: Date = new Date()
+): MonthlyStatistic[] {
+
+  const filtered = applyStatisticsFilters(
+    treatments,
+    { ...filters, dateRange: null }
+  )
+
+  const byMonth = new Map<number, SavedTreatment[]>()
+
+  filtered.forEach(treatment => {
+
+    const date = new Date(treatment.date)
+
+    if (Number.isNaN(date.getTime())) {
+      return
+    }
+
+    const monthIndex = date.getFullYear() * 12 + date.getMonth()
+
+    const list = byMonth.get(monthIndex) ?? []
+
+    list.push(treatment)
+
+    byMonth.set(monthIndex, list)
+
+  })
+
+  let firstMonth: number
+  let lastMonth: number
+
+  if (span === 'all') {
+
+    if (byMonth.size === 0) {
+      return []
+    }
+
+    const months = Array.from(byMonth.keys())
+
+    firstMonth = Math.min(...months)
+    lastMonth = Math.max(...months)
+
+  } else {
+
+    const count = span === 'last6' ? 6 : 12
+
+    lastMonth = now.getFullYear() * 12 + now.getMonth()
+    firstMonth = lastMonth - count + 1
+
+  }
+
+  const rows: MonthlyStatistic[] = []
+
+  for (let monthIndex = firstMonth; monthIndex <= lastMonth; monthIndex++) {
+
+    const group = byMonth.get(monthIndex) ?? []
+
+    const stats = calculateTreatmentStatistics(group)
+
+    rows.push({
+      ...monthKeyFor(monthIndex),
+      treatmentCount: stats.completedCount,
+      averageActualDuration: stats.averageActualDuration,
+      averageExpectedDuration: stats.averageExpectedDuration,
+      percentWithinTarget: stats.percentWithinTarget,
+      lowSample: stats.completedCount < MIN_SAMPLE_SIZE,
+    })
+
+  }
+
+  return rows
 
 }
 
