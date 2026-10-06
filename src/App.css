@@ -167,6 +167,18 @@ a:focus-visible,
   margin-bottom: var(--space-3);
 }
 
+/*
+  Phones (under 520px wide): the fixed sync badge in the top-right corner
+  can be as wide as "Needs your input 3h ago" and used to sit on top of
+  the upper edge of the logo. A little top padding on the Home header
+  moves the logo below the badge. iPad widths are untouched.
+*/
+@media (max-width: 520px) {
+  .home-header {
+    padding-top: var(--space-5);
+  }
+}
+
 .home-logo {
   /*
     Phase 8 sized this up to 96px now that it's the ONLY branding on
