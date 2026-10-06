@@ -166,7 +166,7 @@ describe('comparePhaseNames - guards (close but NOT flagged)', () => {
     expect(comparePhaseNames('Access', 'Obturation')).toEqual({ kind: 'different' })
   })
 
-  it('a trailing "s" is not a typo', () => {
+  it('a real plural (a trailing "s") is not a typo', () => {
     expect(comparePhaseNames('Rinses', 'Rinse')).toEqual({ kind: 'suppressed', guard: 'plural-s', distance: 1 })
     expect(comparePhaseNames('Rinse', 'Rinses')).toEqual({ kind: 'suppressed', guard: 'plural-s', distance: 1 })
     expect(comparePhaseNames('Irrigations', 'Irrigation')).toEqual({ kind: 'suppressed', guard: 'plural-s', distance: 1 })

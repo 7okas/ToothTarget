@@ -27,7 +27,7 @@
    TIER 0      the normalised names are equal but the written names are
                not (case, spacing, punctuation, "&" vs "and"). Warns at
                any length.
-   guards      (a name that passes none of these is not warned about)
+   guards      (a pair stopped by one of these is NOT warned about)
      digits      the digits in the two names differ ("Coat 1" / "Coat 2")
      plural-s    the names differ only by a trailing "s"
                  ("Rinse" / "Rinses", "Coat" / "Coats") - EXCEPT when the
