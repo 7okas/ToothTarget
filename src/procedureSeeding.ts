@@ -82,9 +82,9 @@ import type { Procedure } from './App'
   every other built-in, deliberately NOT "now" - this is what makes
   two different devices that each independently run this migration,
   on two different days, produce byte-for-byte identical records
-  (same id, name, templateId, updatedAt), so cloudMerge.ts's union
-  sees no real conflict between them at all, rather than two devices
-  racing to decide whose migration timestamp should "win".
+  (same id, name, templateId, updatedAt), so a sync comparison sees no
+  difference between them at all, rather than two devices disagreeing
+  over whose migration timestamp is newer.
 */
 
 export const BUILTIN_PROCEDURE_UPDATED_AT = '2024-01-01T00:00:00.000Z'

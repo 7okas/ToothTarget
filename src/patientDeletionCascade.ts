@@ -8,8 +8,8 @@
   as patientNumberConflicts.ts's own extraction from App.tsx.
   confirmDeletePatient() is a thin wrapper around this: it reads the
   current localStorage state, calls planPatientDeletionCascade() once,
-  and applies the resulting plan (localStorage writes, appendTombstone()
-  calls, requestCloudSync()) - this file touches neither localStorage
+  and applies the resulting plan (localStorage writes,
+  requestCloudSync()) - this file touches neither localStorage
   nor React state, and has no knowledge of either.
 
   ============================================================
@@ -25,16 +25,14 @@
 
   A patient with an ACTIVE (currently running) treatment is different
   and BLOCKS the deletion outright instead. A completed SavedTreatment
-  being removed here is still a synced record right up until this
-  moment - it gets tombstoned (by the caller, using
-  removedSavedTreatmentIds) so its removal is recoverable from the
-  cloud like any other synced deletion, and the patient record itself
-  persists in the same way until this device's own tombstone syncs.
-  An ACTIVE treatment is neither of those things: it is pure in-memory/
+  being removed here is a synced record: the removal is a plain local
+  removal that reaches the cloud with the next snapshot (and the
+  resolution screen's safety copies cover recovery). An ACTIVE
+  treatment is neither of those things: it is pure in-memory/
   local-only clock state (see cloudSyncEngine.ts's own header comment
   on what's local-only vs. synced) that has never been saved anywhere,
   synced or not. Clearing it would discard its elapsed phase timings
-  permanently, with no tombstone and no recovery path whatsoever. A
+  permanently, with no recovery path whatsoever. A
   dentist who reaches "delete this patient" while that same patient's
   treatment is actively being timed is far more likely to have gotten
   there by mistake (or simply forgotten a treatment was still running)

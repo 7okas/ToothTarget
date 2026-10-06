@@ -449,7 +449,7 @@ export function __setAppFolderProvisionedForTests(provisioned: boolean): void {
   already carries the id needed for it, so this costs no extra
   request.
 
-  Every distinguishable outcome the future sync/merge layer needs is
+  Every distinguishable outcome the sync layer needs is
   its own status, never collapsed into a generic error:
     - 'not-found': the file genuinely doesn't exist (404) - a normal,
       expected first-run state, never thrown as an error.
@@ -710,8 +710,8 @@ export async function readCloudSyncDocument(): Promise<CloudSyncReadResult> {
   uploadUrl (this is a small JSON document, nowhere near the 60 MiB
   per-request limit), matching Graph's own "Completing a file
   (deferCommit is false)" example. No retry is attempted on 412/409 -
-  that is explicitly Phase 6's job (re-read, merge, retry), not this
-  transport layer's.
+  that is the sync engine's job (re-read, then retry or report
+  'diverged'), not this transport layer's.
 */
 
 export async function writeCloudSyncDocument(
@@ -728,8 +728,8 @@ export async function writeCloudSyncDocument(
   /*
     Uploads exactly the validated document it was given - updatedAt
     (and every other field) is never touched, generated, or refreshed
-    here. Owning document.updatedAt is the merge/orchestration layer's
-    job, not transport's.
+    here. Owning document.updatedAt is the sync engine's job, not
+    transport's.
   */
   const serialized = JSON.stringify(validation.document)
 

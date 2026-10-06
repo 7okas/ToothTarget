@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /*
-  INTEGRATION SUITE (originally Phase 8 of the old roadmap; its
-  two-device MERGE convergence scenarios were replaced by the Sync &
-  Statistics Redesign Plan's own Phase 5 - the single-writer sync
-  model, below)
+  INTEGRATION SUITE (the single-writer sync model: push the whole
+  local snapshot, pull the whole cloud snapshot, diverge when both
+  sides moved)
 
   Everything below exercises the REAL orchestration
   (pushLocalSnapshot/pullCloudSnapshot/syncCloudNow/requestCloudSync)
@@ -20,10 +19,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
   with both devices' pushLocalSnapshot()/pullCloudSnapshot() calls
   reading/writing the SAME FakeCloudFile instance - this is what makes
   these genuine two-device propagation tests rather than a single
-  device talking to itself. Per this phase's own design, there is no
-  blind per-record merge any more (cloudMerge.ts is untouched and still
-  has its own full coverage in cloudMerge.test.ts) - two devices with
-  independent, unreconciled changes now diverge rather than silently
+  device talking to itself. There is no per-record merge: two devices with
+  independent, unreconciled changes diverge rather than silently
   combining; see the "single-writer propagation" tests below for
   exactly that distinction.
 */
@@ -325,19 +322,11 @@ afterEach(() => {
 })
 
 /* ============================================================
-   2. SINGLE-WRITER PUSH/PULL ACROSS TWO DEVICES (Phase 5)
+   2. SINGLE-WRITER PUSH/PULL ACROSS TWO DEVICES
    ============================================================
 
-   Replaces the old per-record-merge convergence/resurrection-
-   prevention/concurrent-editing scenarios this section used to carry
-   (patient-number collision, tombstone-based deletion suppression,
-   latest-updatedAt-wins tie-breaks) - all of that machinery is still
-   fully intact and still fully tested on its own terms
-   (cloudMerge.test.ts/staleRecordReview.test.ts), it is just no longer
-   reachable through the live sync path, so testing it THROUGH
-   syncCloudNow() here no longer means anything. What replaces it is
-   this phase's own model: push the whole local snapshot, pull the
-   whole cloud snapshot, diverge (never guess) when both sides moved.
+   Push the whole local snapshot, pull the whole cloud snapshot, and
+   diverge (never guess) when both sides moved.
 */
 
 describe('single-writer propagation across two devices', () => {
@@ -446,7 +435,7 @@ describe('single-writer propagation across two devices', () => {
 
   })
 
-  it('deleting a patient is a plain local removal, pushed in the next snapshot - no tombstone needed for the deletion to reach another device', async () => {
+  it('deleting a patient is a plain local removal, pushed in the next snapshot - nothing else is needed for the deletion to reach another device', async () => {
 
     const cloud = new FakeCloudFile()
     wireTransportTo(cloud)
@@ -471,10 +460,8 @@ describe('single-writer propagation across two devices', () => {
       readKey<Patient[]>('toothTargetPatients').map(p => p.id).sort()
     ).toEqual(['delete-me', 'keep'])
 
-    // Device B deletes the patient - a plain local removal, deliberately
-    // writing NO tombstone here (unlike App.tsx's own still-unchanged
-    // delete flow, which does write one - this test only exercises the
-    // push/pull layer itself, which never reads tombstones any more).
+    // Device B deletes the patient - a plain local removal, exactly what
+    // the app's own delete flow does now (no tombstone is written).
     seed('toothTargetPatients', [makePatient({ id: 'keep' })])
     markLocalDataDirty()
 
@@ -693,10 +680,7 @@ describe('multiple tabs sharing one cloud file', () => {
       vi.mock('./cloudStorage', ...) and the same shared localStorage/
       FakeCloudFile below.
 
-      Phase 5 (single-writer sync model) - under the OLD per-record
-      merge, two tabs racing like this converged (both patients
-      survived via mergeCloudSyncDocuments()). There is no merge any
-      more: exactly one tab's push can ever win a genuine first-write
+      There is no merge: exactly one tab's push can ever win a genuine first-write
       race, and the other gets 'diverged' (its own retry re-reads the
       winner's now-different content and correctly refuses to guess
       which side should win) - never silent data loss, never a silent
@@ -963,7 +947,6 @@ describe('legacy/unmigrated local data is never uploaded', () => {
     ])
     seed('toothTargetTemplates', [makeBuiltinTemplate()])
     seed('toothTargetProcedures', [])
-    seed('toothTargetDeletionTombstones', [])
 
     const result = await syncCloudNow()
 

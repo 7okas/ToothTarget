@@ -61,20 +61,18 @@ export type CloudSyncDocument = {
   updatedAt is required here (Phase 8, added to Patient for the same
   reason ProcedureTemplate got one in Phase 2 - see App.tsx's Patient
   type comment): patient-number conflict resolution is a legitimate
-  mutation of an existing patient's own record, and cloudMerge.ts's
-  same-id patient merge needs a real timestamp to prefer the
-  resolution over a stale copy, exactly like it already does for
-  templates. This only checks the field is a real, non-empty
-  timestamp string - never compares it to anything; that comparison
-  is the merge engine's job, not this validator's.
+  mutation of an existing patient's own record, and the sync
+  resolution screen needs a real timestamp as its "which side is
+  newer" hint, exactly like it does for templates. This only checks
+  the field is a real, non-empty timestamp string - never compares it
+  to anything.
 
   createdAt (Phase 4.6) is required the same way, for the same reason
   every other required field here is: a document this module accepts
   must already be shaped exactly like App.tsx's own Patient type, not
-  a subset of it - it is never compared or given special merge
-  treatment (a same-id disagreement is still resolved purely by
-  updatedAt, per cloudMerge.ts's pickWinningByUpdatedAt(); whichever
-  record wins simply carries its own createdAt along for free).
+  a subset of it - it is never compared or given special
+  treatment (whichever record the dentist keeps simply carries its own
+  createdAt along for free).
 
   caseType (Phase 3 of the Sync & Statistics Redesign) is OPTIONAL,
   unlike every field above - deliberately, so a document written by
@@ -125,11 +123,10 @@ function isValidSyncPatient(value: unknown): value is Patient {
   updatedAt is required here (Phase 4.6, added to SavedTreatment once
   editing a completed treatment's phase data became possible - see
   App.tsx's confirmEditTreatmentPhases()): a completed treatment is no
-  longer purely create-only, and cloudMerge.ts's same-id treatment
-  merge needs a real timestamp to prefer an edit over a stale copy,
-  exactly like it already does for patients/templates. This only
-  checks the field is a real, non-empty timestamp string - never
-  compares it to anything; that comparison is the merge engine's job.
+  longer purely create-only, and the sync resolution screen needs a
+  real timestamp as its "which side is newer" hint, exactly like it
+  does for patients/templates. This only checks the field is a real,
+  non-empty timestamp string - never compares it to anything.
 */
 
 function isValidSyncSavedTreatment(value: unknown): value is SavedTreatment {
@@ -166,7 +163,8 @@ function isValidSyncSavedTreatment(value: unknown): value is SavedTreatment {
   is a real, non-empty timestamp string, exactly like every other
   timestamp field in this file. It does not compare updatedAt values
   against anything else; deciding which of two templates with the
-  same id "wins" is cloudMerge.ts's concern, not this validator's.
+  same id is newer is the sync resolution screen's concern, not this
+  validator's.
 */
 
 function isValidSyncTemplate(value: unknown): value is ProcedureTemplate {
@@ -189,12 +187,11 @@ function isValidSyncTemplate(value: unknown): value is ProcedureTemplate {
   updatedAt is required here (Phase 5.5, added once editing/deleting a
   procedure became possible - see App.tsx's confirmEditProcedure()/
   the old deleteProcedureFromRegistry()), for the identical reason
-  SavedTreatment gained one in Phase 4.6: cloudMerge.ts's same-id
-  procedure merge needs a real timestamp to prefer an edit over a stale
-  pre-edit copy, exactly like it already does for
-  patients/templates/treatments. This only checks the field is a real,
-  non-empty timestamp string - never compares it to anything; that
-  comparison is the merge engine's job, not this validator's.
+  SavedTreatment gained one in Phase 4.6: the sync resolution screen
+  needs a real timestamp as its "which side is newer" hint, exactly
+  like it does for patients/templates/treatments. This only checks the
+  field is a real, non-empty timestamp string - never compares it to
+  anything.
 
   Phase 2 (Sync & Statistics Redesign) relaxations:
   - isCustom is no longer required to be true. Every procedure/tag,
@@ -268,8 +265,8 @@ function hasDuplicateIds(items: { id: string }[]): boolean {
 /*
   DOCUMENT VALIDATION
 
-  The single entry point - checked before cloudMerge.ts's merge engine
-  is ever allowed to read a cloud document (see cloudStorage.ts's
+  The single entry point - checked before the sync engine is ever
+  allowed to use a cloud document (see cloudStorage.ts's
   readCloudSyncDocument()/writeCloudSyncDocument()). Returns a
   specific, plain-language reason for rejection rather than throwing,
   matching the same discriminated-result convention cloudBackup.ts's

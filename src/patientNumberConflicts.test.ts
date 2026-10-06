@@ -423,8 +423,8 @@ describe('patientNumberConflicts - resolution', () => {
     expect(renumberedPatient?.patientNumber).toBeGreaterThanOrEqual(13)
 
     // The renumbered patient's updatedAt IS refreshed (Phase 8) - this
-    // is what lets cloudMerge.ts's patient merge prefer the correction
-    // over a stale copy of the same UUID still sitting in the cloud.
+    // is what lets the sync resolution screen tell the correction from
+    // a stale copy of the same UUID still sitting in the cloud.
     expect(renumberedPatient?.updatedAt).not.toBe('2026-01-01T00:00:00.000Z')
 
     // The conflict is gone.

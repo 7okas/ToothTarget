@@ -11,8 +11,8 @@ import type { CloudSyncStatus } from './cloudSyncScheduler'
   that file (react-refresh/only-export-components), and this project's
   own established convention is already to keep pure, directly-
   testable decision logic in its own standalone module, separate from
-  the component that renders it (see syncOutcome.ts/startupGate.ts/
-  staleRecordReview.ts for the same pattern). SyncStatusIndicator.test.ts
+  the component that renders it (see syncOutcome.ts/startupGate.ts
+  for the same pattern). SyncStatusIndicator.test.ts
   now imports straight from here, with no need to mock auth.ts/
   cloudSyncScheduler.ts at all - this module has no runtime dependency
   on either (CloudSyncStatus below is a type-only import, erased at
@@ -27,17 +27,16 @@ import type { CloudSyncStatus } from './cloudSyncScheduler'
   attempt - the icon must never regress to "nothing shown" just because
   a retry started.
 
-  icon is a plain function of (currentStatus, hasCompletedOnce, the
-  outcome's own needsAttention flag):
+  icon is a plain function of (currentStatus, hasCompletedOnce, whether
+  the outcome's state needs the dentist - 'conflict' or 'needs-input'):
     - 'pending'/'syncing' -> 'spinner', unconditionally - a spinner
       claims nothing about any past outcome, so it doesn't need one.
     - before any attempt has ever completed this session -> no icon yet
       (there's nothing to report).
     - once at least one attempt has completed, and the most recent
-      outcome needs attention (regardless of whether the coarse status
-      is 'synced' or any non-success state - eg. a successful sync that still
-      left an unresolved patient-number conflict) -> 'attention'.
-    - otherwise, 'synced' -> 'success', any other state -> 'failure'.
+      outcome needs attention (state 'conflict' or 'needs-input') ->
+      'attention'.
+    - otherwise, 'synced' -> 'success', 'offline' -> 'failure'.
   This alone satisfies "success/attention/failure icon persists
   indefinitely, and only flips on an actual subsequent status
   transition" - between one outcome and the next, any retries only ever
@@ -46,18 +45,16 @@ import type { CloudSyncStatus } from './cloudSyncScheduler'
   again, never merely because a new attempt started.
 
   text is keyed off the TRANSITION (previousStatus was 'pending'/
-  'syncing', current status just resolved), same reasoning as before
-  this phase: a result state reached any other way (the
-  long-settled case, or a failure just sitting there from before) must
-  not re-show text that was already shown and has since been
-  dismissed/faded. autoHide is now driven by needsAttention rather than
-  being fixed per coarse status - an outcome the app will resolve on
-  its own (offline, a transient OneDrive error, a self-resolved sync
-  conflict) fades exactly like a plain "Synced" message; one that
-  genuinely needs the dentist's attention (expired sign-in, corrupted
-  cloud data, an unresolved patient-number conflict) stays visible
-  until the next sync attempt changes it, the same persistence "Sync
-  error" always had.
+  'syncing', current status just resolved), so a state reached any
+  other way (the long-settled case, or a failure just sitting there
+  from before) never re-shows text that was already shown and has since
+  been dismissed/faded. autoHide is driven by whether the state needs
+  the dentist: an outcome the app will resolve on its own ('offline')
+  fades exactly like a plain "Synced" message; one that needs the
+  dentist ('conflict', 'needs-input': expired sign-in, corrupted cloud
+  data, a sync conflict) stays visible until the next sync attempt
+  changes it. The detail line behind either is reachable by tap (see
+  canShowDetailFromBadge below).
 */
 
 export type SyncIconState = 'spinner' | 'success' | 'attention' | 'failure' | null

@@ -74,8 +74,8 @@ import {
   6. The final document must pass validateCloudSyncDocument().
 
   The result's updatedAt is the nowIso passed in (the caller generates
-  and remembers it once - the crash-recovery stamp); tombstones are
-  always [] (nothing writes them to the cloud any more).
+  and remembers it once - the crash-recovery stamp). The resolved document
+  carries no deletion-tombstone field (nothing writes one any more).
 */
 
 export type Choice = 'device' | 'cloud' | 'omit'

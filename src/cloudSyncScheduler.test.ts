@@ -85,7 +85,7 @@ describe('requestCloudSync - coalescing', () => {
     function simulateMultiStepMutation() {
       requestCloudSync() // after removing the patient
       requestCloudSync() // after cleaning up saved treatments
-      requestCloudSync() // after the tombstone is recorded
+      requestCloudSync() // after the last write
     }
 
     simulateMultiStepMutation()

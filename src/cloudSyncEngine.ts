@@ -20,18 +20,24 @@ import { recordDeviceSyncSuccess } from './deviceSyncTracking'
 
 
 /*
-  CLOUD SYNC ENGINE (Phase 6 - orchestration)
+  CLOUD SYNC ENGINE (single-writer sync)
+
+  One dentist, one device at a time; OneDrive is a backup, not a
+  collaboration store. There is no per-record merge: this device either
+  pushes its whole local snapshot, adopts the cloud's snapshot, or - if
+  both changed - stops with 'diverged' and lets the resolution screen
+  (syncResolve.ts and friends) decide. Nothing is ever silently
+  overwritten.
 
   This is the one explicit entry point (syncCloudNow()) that connects
-  every previous layer into a single safe synchronization transaction:
-  Phase 1's schema/validator (cloudSync.ts) and Phase 5's transport
-  (cloudStorage.ts).
+  the schema/validator (cloudSync.ts) and the transport
+  (cloudStorage.ts) into a single safe synchronization transaction.
 
   Automatic background sync is real and in production: syncCloudNow()
   is called through cloudSyncScheduler.ts's requestCloudSync()/
   requestCloudSyncIfSignedIn(), which App.tsx triggers after every
   meaningful synchronized-data change (patient/treatment/template/
-  procedure create-edit-delete, tombstones), on app load, and on
+  procedure create-edit-delete), on app load, and on
   Microsoft sign-in (see MicrosoftAccountSection.tsx's handleSignIn()).
   It is also safe to call directly - eg. from a test - with the same
   behavior either way.
@@ -44,7 +50,7 @@ import { recordDeviceSyncSuccess } from './deviceSyncTracking'
   MSAL at module load time, crashing under Vitest's default 'node'
   environment. This module DOES have a real runtime dependency on
   auth.ts, but only transitively through cloudStorage.ts's
-  getAccessToken() call - exactly the boundary Phase 5's own tests
+  getAccessToken() call - exactly the boundary this module's tests
   already mock via vi.mock('./auth', ...), and this file's own tests
   do the same.
 
@@ -70,36 +76,28 @@ import { recordDeviceSyncSuccess } from './deviceSyncTracking'
     transient UI state.
 
   ============================================================
-  CRASH-SAFETY ANALYSIS (see report for the full writeup)
+  CRASH-SAFETY ANALYSIS
   ============================================================
 
-  No new "pending snapshot" transaction marker was needed. Phase 3's
-  merge is a deterministic, commutative, idempotent UNION over each
-  entity collection (patients/treatments/templates/procedures/
-  tombstones keyed by id, tombstones keyed by (entityType, entityId)):
-  merging a SUBSET of a dataset back into that same dataset always
-  reproduces the dataset unchanged. Since a successful cloud write
-  always uploads merge(local-at-that-moment, cloud-at-that-moment),
-  and local-at-that-moment is by construction a subset of the
-  resulting merged/uploaded document, ANY future sync attempt that
-  re-reads a stale (or even partially-torn, key-by-key) local snapshot
-  and merges it against the now-current cloud document is guaranteed
-  to converge back to the correct state - old data can never be lost,
-  and re-merging never fabricates or duplicates anything. This is what
-  makes the five localStorage.setItem() calls in commitLocalState()
-  safe to perform as separate, non-atomic writes: even if the tab
-  crashes between two of them, the next sync's fresh read-merge-write
-  cycle self-heals, because each individual key is still either the
-  old (subset) value or the new (already-converged) value, and merging
-  either against the authoritative cloud state produces the same
-  correct result.
+  A push writes the cloud document first and only then advances this
+  device's own bookkeeping (the cloud version it last confirmed, the
+  change counter, the last-sync time) in recordSuccessfulPush(). If the
+  tab dies between the two, the cloud already holds this device's data,
+  but the device has not yet recorded that: on the next attempt the cloud
+  version differs from the last confirmed one while local still looks
+  unsynced, so the engine reports 'diverged' rather than guessing -
+  nothing is overwritten, and the resolution screen shows the two sides
+  as identical (or near-identical) records. Adopting the cloud snapshot
+  (pull) replaces local data key by key; a crash part-way leaves the
+  device without a confirmed cloud version, so the next attempt takes
+  the same safe path, and a safety copy of the previous local data is
+  written first (writePreAdoptSafetyCopy()).
 
-  The one thing this module must still get right ITSELF (within a
-  single call) is honesty: if the cloud upload succeeds but the local
-  commit throws (eg. a real localStorage quota error) DURING this same
-  call, this function must not report a false 'synced' - see the
-  'cloud-committed-locally-pending' status below and its handling in
-  performSync().
+  The one thing this module must get right ITSELF (within a single call)
+  is honesty: if the cloud upload succeeds but the local bookkeeping
+  throws (eg. a real localStorage quota error) DURING this same call,
+  this function must not report a false 'synced' - see the
+  'cloud-committed-locally-pending' status below.
 */
 
 const PATIENTS_KEY = 'toothTargetPatients'
@@ -115,7 +113,7 @@ const RETIRED_TOMBSTONES_KEY = 'toothTargetDeletionTombstones'
 const NEXT_PATIENT_NUMBER_KEY = 'toothTargetNextPatientNumber'
 
 /*
-  Phase 3's own local synchronized-document timestamp (section 3) -
+  The local synchronized-document timestamp -
   deliberately NOT part of CloudSyncDocument itself (that type has no
   extra field for it). Read as the LOCAL candidate document's
   updatedAt when building it for a push, and only ever written by this
@@ -317,7 +315,7 @@ function readPersistedNextPatientNumber(): number {
 
   Reads exactly the five synchronized keys and runs the result
   through validateCloudSyncDocument() before returning it - this
-  module never uploads or merges data it hasn't first confirmed is a
+  module never uploads data it hasn't first confirmed is a
   structurally valid v2 document. If local data is somehow not yet in
   the current (migrated) shape - this module does not itself run
   migrations, see this file's header comment - validation fails here
@@ -335,8 +333,7 @@ function readPersistedNextPatientNumber(): number {
   device's very first sync), which is a genuine first-existence event
   for the synchronized-document concept, not a "sync was merely
   attempted" bump. Every subsequent call reuses the persisted value
-  until commitLocalState() advances it after an actual successful
-  merge commit.
+  until a push or adopt advances it after an actual success.
 */
 
 export function buildLocalCloudSyncDocument():
@@ -371,13 +368,7 @@ export function buildLocalCloudSyncDocument():
 
   pushLocalSnapshot() is the new push entry point: build the current
   local state into one document and write it, with no per-record merge
-  at all - the single-writer model this app actually needs (one
-  dentist, one device at a time; OneDrive is a backup, not a
-  collaboration store). Not wired into syncCloudNow() yet in this step -
-  see this file's own CloudSyncResult/syncCloudNow() for the OLD
-  per-record-merge path, still untouched and still exercised by
-  cloudSyncEngine.test.ts until a later step rewires syncCloudNow()
-  itself to call this.
+  at all. syncCloudNow() calls this.
 
   THE ONE SAFETY CHECK BEFORE EVER WRITING (the Phase 6 hook): compare
   the cloud document's ACTUAL updatedAt against
@@ -386,9 +377,8 @@ export function buildLocalCloudSyncDocument():
   comment above). A mismatch means something else changed the cloud
   since this device last knew about it - this device refuses to
   silently overwrite that with its own (possibly older, possibly just
-  different) local state, and returns 'diverged' instead. Phase 6
-  replaces this with real per-record conflict listing; nothing else
-  about this function needs to change for that to plug in here.
+  different) local state, and returns 'diverged' instead. The
+  resolution screen is the way forward from there.
 */
 
 /*
@@ -396,9 +386,8 @@ export function buildLocalCloudSyncDocument():
   this phase) - every CloudSyncReadResult status that ISN'T 'not-found'
   or 'found' is a transport/corruption failure this device can't do
   anything about itself, and both callers need to forward it identically
-  (the exact same shapes the OLD performSync() already returns for each
-  one, so CloudCorruptionRecoveryDialog.tsx/the badge keep working
-  unmodified). Returns null for 'not-found'/'found', which the caller
+  (so CloudCorruptionRecoveryDialog.tsx/the badge see the same shapes
+  from both). Returns null for 'not-found'/'found', which the caller
   still needs to handle itself (this function has no opinion on what a
   successful read should do next).
 */
@@ -437,15 +426,15 @@ export function classifyCloudReadFailure(
 }
 
 /*
-  Lighter than the OLD commitLocalState(): a push never changes what
+  A push never changes what
   patients/savedTreatments/customTemplates/customProcedures already are
   (they're exactly what was just read and uploaded), so only the
   sync-tracking state needs advancing - the cloud version this device
   now knows about, the change counter "as of" this push (captured by the
   CALLER before this push's first await - see this function's own
   counterAtStart parameter), the device's own last-successful-sync
-  timestamp, and (same reconciliation commitLocalState() already uses)
-  the local patient-number counter.
+  timestamp, and the local patient-number counter (reconciled so it can
+  never fall behind the highest assigned number).
 */
 function recordSuccessfulPush(
   document: CloudSyncDocument,
@@ -672,8 +661,8 @@ export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
       device already knew before this push started, retry the write
       once with the fresh ETag. If it now differs, that's a real
       divergence - report it the same way the pre-write check above
-      would have. No loop, no re-merge: there is nothing to merge
-      against in this model.
+      would have. No loop: there is nothing to merge against in this
+      model.
     */
 
     const retryRead = await readCloudSyncDocument()
@@ -724,8 +713,7 @@ export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
     /*
       Shouldn't happen - localResult.valid was already confirmed above -
       but the transport layer re-validates independently and this
-      module never assumes away a disagreement between the two (same
-      reasoning the OLD performSync() already documents for itself).
+      module never assumes away a disagreement between the two.
     */
     return { status: 'validation-failed', detail: writeResult.detail }
   }
@@ -733,8 +721,7 @@ export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
   // writeResult.status === 'written' from here on. The cloud already
   // has this device's data - a failure past this point is a LOCAL
   // bookkeeping problem, never grounds to report anything other than
-  // 'cloud-committed-locally-pending' (same honesty discipline the OLD
-  // performSync()/commitLocalState() pairing already followed: never
+  // 'cloud-committed-locally-pending' (same honesty discipline: never
   // claim 'synced' if the local half of that didn't actually happen).
   try {
 
@@ -823,8 +810,8 @@ function writePreAdoptSafetyCopy(): void {
   customProcedures replace wholesale (this device had nothing of its
   own worth keeping, per the caller's own clean-to-adopt check), and
   templates keep this device's built-ins and replace only the custom
-  ones, the same pattern commitLocalState()/applyCloudRestore() already
-  use for the identical reason.
+  ones, the same pattern applyCloudRestore() already uses for the
+  identical reason.
 */
 function adoptCloudSnapshotLocally(
   document: CloudSyncDocument,
@@ -1122,7 +1109,7 @@ export type CloudSyncResult =
         diagnosis field is (see cloudStorage.ts) - every existing
         mocked CloudSyncResult literal in this project's test suite,
         written before this diagnosis feature existed, keeps
-        compiling unchanged. performSync() below always forwards
+        compiling unchanged. classifyCloudReadFailure() always forwards
         whatever readCloudSyncDocument() gave it.
       */
       diagnosis?: CloudSyncCorruptionDiagnosis
@@ -1178,7 +1165,7 @@ export function syncCloudNow(): Promise<CloudSyncResult> {
   Microsoft account it belongs to - it's just whatever this device
   currently has in localStorage. If the dentist signs out and into a
   DIFFERENT Microsoft account on the same device, the next automatic
-  sync would otherwise merge the previous account's still-present
+  sync would otherwise push the previous account's still-present
   local data into the new account's OneDrive - two accounts' patient/
   treatment data silently mixed together, in either direction.
 
@@ -1198,7 +1185,7 @@ export function syncCloudNow(): Promise<CloudSyncResult> {
   every point a Microsoft account can newly become active: a fresh
   popup sign-in (MicrosoftAccountSection.tsx's handleSignIn()) and the
   app-load "already signed in from before" check (App.tsx's Phase 2
-  effect). It is deliberately NOT wired into Phase 3's online-retry
+  effect). It is deliberately NOT wired into the online-retry
   listener - regaining connectivity can never itself change which
   account is signed in, so there is nothing to reconcile there.
 
@@ -1257,8 +1244,8 @@ type AccountLocalCache = {
     semantically tied to THIS account's own patient numbering: left
     stale (eg. carried
     over from whichever account happened to be active most recently),
-    it can only ever ratchet up (never down, per commitLocalState()'s
-    own Math.max reconciliation), so an account resuming after another
+    it can only ever ratchet up (never down - the counter is always
+    reconciled with Math.max), so an account resuming after another
     account was used in between could see its own next-patient-number
     jump ahead for no reason. Caching and restoring it per account
     keeps each account's own numbering exactly where that account
@@ -1430,13 +1417,13 @@ function readAccountCache(accountId: string): AccountLocalCache | null {
   never seen the incoming account before), reflect a clean, empty
   default - exactly like today's first-time-device behavior. Built-in
   TEMPLATES are preserved either way, read fresh from whatever is
-  CURRENTLY persisted, the same pattern commitLocalState() already
-  uses for the same reason (built-in templates are never account-
+  CURRENTLY persisted, the same pattern replaceLocalSyncedData() uses
+  for the same reason (built-in templates are never account-
   specific and must never be replaced or duplicated by this).
 
-  PROCEDURES are written as a full, unconditional replace instead
-  (Phase 2, Sync & Statistics Redesign) - unlike commitLocalState()'s
-  own "skip the write if empty" guard, this one must NOT skip when
+  PROCEDURES are written as a full, unconditional replace
+  (Phase 2, Sync & Statistics Redesign) - there is no "skip the write
+  if empty" guard here: this must NOT skip when
   cache?.customProcedures is empty: isolating each account's own data
   is this function's entire purpose, so a brand-new/never-seen
   account (cache === null) switching in must never keep showing the
@@ -1446,8 +1433,8 @@ function readAccountCache(accountId: string): AccountLocalCache | null {
   - App.tsx's own mount-time load effect falls back to the built-in
   default procedure list whenever toothTargetProcedures comes back
   empty, so the brief "empty in storage" moment this can produce is
-  never actually read by live React state the way commitLocalState()'s
-  own (reload-free) background-sync path could.
+  never actually read by live React state the way a reload-free
+  background-sync path could.
 */
 function applyAccountCacheToLocalStorage(cache: AccountLocalCache | null): void {
 

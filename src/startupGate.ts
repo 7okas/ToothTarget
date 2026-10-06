@@ -4,8 +4,8 @@ import type { SyncOutcomeReason } from './syncOutcome'
 /*
   STARTUP SIGN-IN / SYNC GATE (Phase 6.5)
 
-  Pure, standalone decision logic (same reasoning as syncOutcome.ts/
-  staleRecordReview.ts's own extraction: directly unit-testable, no
+  Pure, standalone decision logic (same reasoning as syncOutcome.ts's
+  own extraction: directly unit-testable, no
   React/DOM) behind StartupGateScreen.tsx, the full-screen gate shown
   at app startup, before the patient list is reachable.
 

@@ -179,9 +179,9 @@ export type Procedure = {
     procedure record was "create-only/immutable" in every normal local
     workflow until editing (confirmEditProcedure()) and archiving
     (setProcedureArchiveStatusInRegistry()) a procedure became possible.
-    Without a real timestamp, cloudMerge.ts's same-id merge would have
-    no honest way to prefer an edit over a stale pre-edit copy still
-    sitting in the cloud. Set at creation (addProcedure()), bumped on
+    Without a real timestamp there would be no honest way to tell an
+    edit from a stale pre-edit copy of the same procedure (the sync
+    resolution screen uses it as a "which side is newer" hint). Set at creation (addProcedure()), bumped on
     every edit; existing procedures missing it are backfilled once by
     migrateProcedureTimestamps() (falling back to "now", the same
     approximation migrateTemplateTimestamps() already uses for
@@ -232,11 +232,9 @@ export type Patient = {
     "immutable, create-only" in every normal local workflow, but
     patient-number conflict resolution (Phase 4/8) IS a legitimate,
     intentional mutation of an existing patient's own patientNumber -
-    without a timestamp, cloudMerge.ts's same-UUID-different-content
-    tie-break (deliberately content-based, not time-based, for a
-    genuinely-immutable record) could just as easily pick the STALE
-    pre-resolution value, silently undoing the dentist's own
-    resolution on the very next sync. Required on every patient
+    without a timestamp there would be no honest way to tell the
+    resolved record from a stale pre-resolution copy of the same UUID
+    on another device. Required on every patient
     (matching cloudSync.ts's validator); existing patients missing it
     are backfilled once by migratePatientTimestamps() below, exactly
     like migrateTemplateTimestamps() already does for templates.
@@ -258,8 +256,8 @@ export type Patient = {
     it set explicitly to 'Clinical' at creation time
     (allocatePatientUnderLock()), same as every other field a
     dropdown defaults - editing it (editPatientRecordUnderLock())
-    bumps updatedAt exactly like a name/number edit does, so cloud
-    merge/sync treats it like any other intentional content change.
+    bumps updatedAt exactly like a name/number edit does, so sync
+    treats it like any other intentional content change.
   */
   caseType?: PatientCaseType
 }
@@ -366,14 +364,13 @@ export type SavedTreatment = {
     Phase 4.6 addition - added for the exact same reason Patient
     (Phase 8) and ProcedureTemplate (Phase 2) each gained one:
     completing a treatment was this type's only mutation until now,
-    which is why cloudMerge.ts's own comment could previously call
-    SavedTreatment "create-only/immutable" and use a purely content-
-    based tiebreak for a same-id disagreement. Editing a completed
+    which is why SavedTreatment used to be "create-only/immutable".
+    Editing a completed
     treatment's phase data (see confirmEditTreatmentPhases()) IS a
     genuine, intentional content mutation, exactly like patient-number
-    conflict resolution is for Patient - without a timestamp,
-    cloudMerge.ts's same-id merge would have no honest way to prefer
-    the edit over a stale pre-edit copy still sitting in the cloud.
+    conflict resolution is for Patient - without a timestamp there
+    would be no honest way to tell the edit from a stale pre-edit copy
+    still sitting in the cloud.
     Set at completion time (same instant as completedAt) and bumped on
     every edit; existing treatments missing it are backfilled once by
     migrateSavedTreatmentTimestamps(), falling back to completedAt (or
@@ -2649,10 +2646,8 @@ async function deletePatientFromRegistry(
   A collision with another patient's number is NOT blocked - the edit
   is allowed to proceed, and the collision is recorded as a genuine
   PatientNumberConflict via recordAndReconcilePatientNumberConflicts(),
-  reusing the exact same detect-and-record pattern a cloud merge
-  already uses for the same situation (two devices independently
-  assigning the same number), rather than inventing separate
-  edit-specific conflict handling. The dentist resolves it afterward
+  using the same detect-and-record path as any other patient-number
+  collision, rather than separate edit-specific conflict handling. The dentist resolves it afterward
   through the existing conflict-browser UI, same as any other
   patient-number conflict.
 */
@@ -4259,7 +4254,7 @@ const [conflictResolutionError, setConflictResolutionError] =
     called first, before ever requesting a sync, so a device that's
     signing in with a DIFFERENT Microsoft account than whatever this
     device's local data currently belongs to never gets a chance to
-    merge that stale data into the new account's cloud document (see
+    push that stale data into the new account's cloud document (see
     cloudSyncEngine.ts's own header comment on this function for the
     full reasoning). If it reports a switch just happened, local
     synced data has already been quarantined (see
@@ -4491,17 +4486,17 @@ const [conflictResolutionError, setConflictResolutionError] =
   /*
     REFRESH AFTER BACKGROUND SYNC
 
-    cloudSyncEngine.ts's commitLocalState() writes freshly-merged
-    synced data straight into localStorage whenever a background sync
-    succeeds (triggered automatically after sign-in, on app load, and
+    cloudSyncEngine.ts writes the cloud's synced data straight into
+    localStorage whenever a background sync adopts it (or a resolution
+    is applied) (triggered automatically after sign-in, on app load, and
     after most patient/treatment/template/procedure mutations - see
     requestCloudSync()'s call sites throughout this file) - but that's
     an external write this component's own React state has no way to
     notice on its own: the mount effect above only ever runs once, and
     the "storage" event above only fires in OTHER tabs, never this
     one. Subscribing to cloudSyncScheduler.ts's own local-data-version
-    counter (bumped only once commitLocalState() has actually
-    succeeded - see that function's own comment) closes this gap:
+    counter (bumped only once the local write has actually
+    succeeded - see cloudSyncScheduler.ts) closes this gap:
     every time a background sync lands new data locally, this re-reads
     exactly the same synced keys and adopts them into the UI, with no
     reload required. Deliberately a lighter read than the mount

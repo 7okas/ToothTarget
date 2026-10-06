@@ -23,12 +23,11 @@
   than mis-attributed.
 
   Each rewritten treatment also gets its updatedAt bumped to `now` -
-  SavedTreatment.updatedAt exists specifically so cloudMerge.ts can
-  resolve a same-id disagreement by recency (see SavedTreatment's own
-  comment on that field, added Phase 4.6 Part D). Leaving updatedAt
-  untouched here would let this rename lose a merge race against an
-  older, stale copy of the same treatment sitting on another device -
-  exactly the bug Part D fixed for phase-timing edits.
+  SavedTreatment.updatedAt records when a treatment last changed (see
+  SavedTreatment's own comment on that field, added Phase 4.6 Part D),
+  and the sync resolution screen uses it as a "which side is newer"
+  hint. Leaving it untouched here would make this rename look older
+  than a stale copy of the same treatment on another device.
 */
 
 type RenameableTreatment = {

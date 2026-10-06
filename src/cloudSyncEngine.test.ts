@@ -1,15 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /*
-  Phase 5 (single-writer sync model) removed every OLD per-record-merge
-  syncCloudNow() test this file used to carry - that whole orchestration
-  (mergeCloudSyncDocuments(), the stale-review gate, 412-retry-and-
-  re-merge, patient-number-conflict ingestion) is no longer reachable
-  through syncCloudNow(), which now calls pushLocalSnapshot() instead
-  (see cloudSyncEngine.singleWriter.test.ts for its own, current
-  coverage). What's left here - reconcileSyncedAccount()'s per-account
-  local-cache isolation - is completely UNCHANGED by this phase and
-  still exactly as tested before.
+  Covers reconcileSyncedAccount()'s per-account local-cache isolation
+  (the push/pull/adopt/diverge coverage is in
+  cloudSyncEngine.singleWriter.test.ts).
 
   cloudStorage.ts is still mocked (even though nothing below calls
   readCloudSyncDocument/writeCloudSyncDocument directly) purely so the
@@ -34,8 +28,8 @@ import type {
 import { reconcileSyncedAccount } from './cloudSyncEngine'
 
 /*
-  Minimal, fully-typed in-memory Storage - see cloudMerge.test.ts/
-  patientNumberConflicts.test.ts for the same pattern used elsewhere
+  Minimal, fully-typed in-memory Storage - see patientNumberConflicts.test.ts/
+  cloudSyncEngine.singleWriter.test.ts for the same pattern used elsewhere
   in this project's test suite.
 */
 

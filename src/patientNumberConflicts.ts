@@ -101,9 +101,7 @@ export function computeNextPatientNumber(
   another patient's number. Deliberately NOT exported as a blocker -
   the edit itself is never prevented by this; the caller passes
   whatever this returns straight into recordAndReconcilePatientNumberConflicts()
-  below, the exact same detect-and-record pattern a cloud merge already
-  uses for the same underlying situation (two independently-made
-  changes landing on the same number).
+  below.
 */
 
 export function detectPatientNumberConflict(
@@ -279,15 +277,13 @@ export function reconcileAndPersistPatientNumberConflicts(
 }
 
 /*
-  INGEST CONFLICTS REPORTED BY A CLOUD MERGE (Phase 6)
+  RECORD NEWLY DETECTED CONFLICTS
 
-  mergeCloudSyncDocuments() (cloudMerge.ts) can report brand new
-  patient-number conflicts that this device has never seen before -
-  this is the one place that happens, since normal local patient
-  creation can never produce one (see this file's own header comment).
-  Unlike reconcileAndPersistPatientNumberConflicts() above (which only
-  ever DROPS stale entries), this ADDS the merge's freshly-reported
-  conflicts to whatever is already persisted, unioning patientIds by
+  Used when a collision is detected (right after a patient-number edit,
+  see detectPatientNumberConflict() above). Unlike
+  reconcileAndPersistPatientNumberConflicts() above (which only ever
+  DROPS stale entries), this ADDS the freshly-detected conflicts to
+  whatever is already persisted, unioning patientIds by
   patientNumber (two independently-detected conflicts for the same
   number combine their known conflicting ids rather than one silently
   replacing the other), and then reconciles the combined list against
@@ -463,11 +459,8 @@ export function resolvePatientNumberConflictUnderLock(
     this is a genuine content change to their record (Phase 8) - never
     on the kept patient, whose data is completely unchanged, matching
     the same "only the actually-edited record gets a fresh timestamp"
-    principle Phase 2 already established for templates. Without this,
-    cloudMerge.ts's same-id patient merge (pickWinningByUpdatedAt)
-    would have no way to prefer this correction over a stale copy of
-    the same patient UUID still sitting in the cloud from before the
-    resolution.
+    principle Phase 2 already established for templates. The sync
+    resolution screen uses it as its "which side is newer" hint.
   */
   const updatedPatients =
     currentPatients.map(patient =>

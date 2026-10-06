@@ -15,8 +15,8 @@ import { getToothLabel } from './teeth'
   screen lists.
 
   Four collections, each keyed by record id: patients, savedTreatments,
-  customTemplates, customProcedures (procedures/tags). Tombstones are
-  not compared - nothing writes them to the cloud any more.
+  customTemplates, customProcedures (procedures/tags). The retired
+  deletion-tombstone list is not compared - nothing writes it any more.
 
   ============================================================
   WHAT COUNTS AS "DIFFERENT"

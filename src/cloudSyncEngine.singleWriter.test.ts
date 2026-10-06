@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /*
-  PHASE 5 - SINGLE-WRITER SYNC MODEL
+  SINGLE-WRITER SYNC MODEL
 
-  A dedicated test file for everything Phase 5 adds to
-  cloudSyncEngine.ts, kept separate from cloudSyncEngine.test.ts (which
-  still covers the OLD per-record-merge syncCloudNow()/
-  reconcileSyncedAccount() behavior until Phase 7 removes it) so this
-  phase's own coverage doesn't get mixed into a file that's about to be
-  substantially rewritten in a later step of this same phase.
+  The push/pull/adopt/diverge coverage for cloudSyncEngine.ts, kept
+  separate from cloudSyncEngine.test.ts (which covers
+  reconcileSyncedAccount()'s per-account cache isolation).
 
   Same cloudStorage.ts mock + in-memory Storage pattern
   cloudSyncEngine.test.ts already uses, for the same reason (see that
@@ -161,7 +158,6 @@ function seedLocalSynchronizedData(overrides: {
   seed('toothTargetSavedTreatments', overrides.savedTreatments ?? [])
   seed('toothTargetTemplates', [])
   seed('toothTargetProcedures', [])
-  seed('toothTargetDeletionTombstones', [])
 }
 
 describe('isLocalDataDirty - missing-flag default (Amendment 1)', () => {
@@ -726,7 +722,6 @@ describe('pushLocalSnapshot - local validation', () => {
     seed('toothTargetSavedTreatments', [])
     seed('toothTargetTemplates', [])
     seed('toothTargetProcedures', [])
-    seed('toothTargetDeletionTombstones', [])
 
     const result = await pushLocalSnapshot()
 
@@ -844,7 +839,7 @@ describe('pullCloudSnapshot - cloud absent', () => {
 
 describe('pullCloudSnapshot - clean local, cloud found: adopts wholesale (Amendment 3)', () => {
 
-  it('replaces patients/savedTreatments/custom templates/procedures with the cloud snapshot, drops the retired tombstone key, and writes a pre-adopt safety copy of the OLD local data', async () => {
+  it('replaces patients/savedTreatments/custom templates/procedures with the cloud snapshot, drops the retired tombstone key, and writes a pre-adopt safety copy of the previous local data', async () => {
 
     seedLocalSynchronizedData({
       patients: [makePatient({ id: 'old-local-patient' })],

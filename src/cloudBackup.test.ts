@@ -22,7 +22,7 @@ import {
   to restore without disturbing the device's own original five tags.
 
   Minimal, fully-typed in-memory Storage - see cloudSyncEngine.test.ts/
-  cloudMerge.test.ts for the same pattern used elsewhere in this
+  patientNumberConflicts.test.ts for the same pattern used elsewhere in this
   project's test suite. cloudBackup.ts has no runtime dependency on
   anything window/document-shaped for the functions exercised here
   (createCloudBackup/validateCloudBackup/mergeProceduresForRestore are

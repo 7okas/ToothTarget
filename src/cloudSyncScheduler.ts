@@ -12,14 +12,14 @@ import {
 import { maybeRotateBackup } from './cloudBackupRotation'
 
 /*
-  CLOUD SYNC SCHEDULER (Phase 7 - integration)
+  CLOUD SYNC SCHEDULER (integration)
 
   The one function production code calls after a meaningful,
   already-successfully-committed change to the synchronized dataset
-  (patients/savedTreatments/customTemplates/customProcedures/
-  deletionTombstones): requestCloudSync(). It never contains merge or
-  Graph logic of its OWN - it only decides WHEN to call Phase 6's
-  syncCloudNow(), and coalesces bursts of requests into a single call.
+  (patients/savedTreatments/customTemplates/customProcedures):
+  requestCloudSync(). It never contains sync or Graph logic of its OWN
+  - it only decides WHEN to call syncCloudNow(), and coalesces bursts
+  of requests into a single call.
 
   Phase 9 addition: every successful attempt also fires
   maybeRotateBackup() (cloudBackupRotation.ts) - fire-and-forget, see
@@ -78,14 +78,10 @@ import { maybeRotateBackup } from './cloudBackupRotation'
   requestCloudSync() was ever called - see this file's call sites in
   App.tsx).
 
-  No persisted "sync needed" marker was added either: Phase 6's merge
-  is a deterministic union, so any future sync (triggered by the next
-  real mutation, whenever that happens - even after a full page
-  reload) reconstructs the correct cloud superset from whatever is
-  currently in localStorage. An in-memory pending flag can never make
-  data disappear across a refresh, because it was never data in the
-  first place - only a hint about when to next attempt a sync that
-  will already succeed based purely on local storage's own content.
+  The in-memory pending flag is not persisted: the durable record of
+  "this device has unsynced changes" is the change counter in
+  cloudSyncEngine.ts (markLocalDataDirty()), which survives a reload.
+  The flag itself is only a hint about when to next attempt a sync.
 */
 
 let running = false
@@ -224,11 +220,11 @@ export function subscribeLastSyncOutcome(listener: () => void): () => void {
   LOCAL DATA VERSION (UI refresh signal)
 
   A plain incrementing counter, bumped exactly once per sync attempt
-  whose result is 'synced' - the one status that only exists
-  once cloudSyncEngine.ts's own commitLocalState() has already run and
-  succeeded (see that file's header comment: 'cloud-committed-locally-pending' is returned
-  instead whenever the cloud write succeeded but the local commit
-  itself threw, so it deliberately does NOT bump this).
+  whose result is 'synced' - the one status that only exists once
+  cloudSyncEngine.ts has finished its local bookkeeping/write
+  successfully ('cloud-committed-locally-pending' is returned instead
+  whenever the cloud write succeeded but the local step itself threw,
+  so it deliberately does NOT bump this).
 
   This exists so a component holding React state that mirrors synced
   localStorage keys (App.tsx's savedPatients/savedTreatments/
@@ -361,7 +357,7 @@ function startIfIdle(): void {
         /*
           See LOCAL DATA VERSION's own comment above for exactly why
           this fires here and only here (isSuccessStatus() is exactly
-          "commitLocalState() ran and succeeded").
+          "the local step ran and succeeded").
         */
         if (succeeded) {
           bumpLocalDataVersion()
@@ -416,8 +412,8 @@ function startIfIdle(): void {
 
 /*
   Call this after a synchronized-data mutation (patients,
-  savedTreatments, custom templates, custom procedures, or deletion
-  tombstones) has already been committed successfully to
+  savedTreatments, custom templates, or custom procedures) has already
+  been committed successfully to
   localStorage. Safe to call any number of times in a row, from
   anywhere, at any time - it never throws, never blocks the caller,
   and never opens a login prompt on its own (see auth.ts's
