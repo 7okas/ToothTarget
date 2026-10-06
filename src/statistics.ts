@@ -292,6 +292,82 @@ export function resolveDateRangePreset(
 }
 
 /*
+  CUSTOM DATE RANGE - LOCAL CALENDAR DAYS
+
+  Turns the two "YYYY-MM-DD" values of a date picker into a concrete
+  range covering whole days on the DEVICE'S OWN calendar: from the very
+  start of the first day to the very last instant of the second day,
+  inclusive of both. A treatment's date is an exact UTC instant; the
+  dentist thinks in local days, so a treatment finished at 00:30 local
+  time on the 1st must count for the 1st even though that instant is
+  still the 31st in UTC.
+
+  The end of the last day is computed as "the start of the NEXT local
+  day, minus one millisecond" rather than "23:59:59.999 on that day".
+  That keeps consecutive days an exact partition of time around a
+  daylight-saving change: on a clock-back day (a 25-hour day, the
+  repeated hour included) nothing falls between two days or is counted
+  twice, and on a clock-forward day (23 hours; local midnight may not
+  exist) the day simply starts at the first real instant.
+
+  Returns null when either value is missing or is not a real calendar
+  date (so the caller treats it as "no range chosen yet", same as before).
+  If from is after to the range is returned as given and matches nothing.
+  The result is an ordinary DateRange, so applyStatisticsFilters() and
+  resolveDateRangePreset('custom', ...) need no change.
+*/
+
+function parseLocalDay(value: string): { year: number; month: number; day: number } | null {
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+
+  if (!match) {
+    return null
+  }
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+
+  const check = new Date(year, month - 1, day)
+
+  if (
+    check.getFullYear() !== year ||
+    check.getMonth() !== month - 1 ||
+    check.getDate() !== day
+  ) {
+    return null
+  }
+
+  return { year, month, day }
+
+}
+
+export function resolveCustomDateRange(
+  fromDay: string,
+  toDay: string
+): DateRange | null {
+
+  const from = parseLocalDay(fromDay)
+  const to = parseLocalDay(toDay)
+
+  if (from === null || to === null) {
+    return null
+  }
+
+  const start = new Date(from.year, from.month - 1, from.day, 0, 0, 0, 0)
+
+  const nextDayStart = new Date(to.year, to.month - 1, to.day + 1, 0, 0, 0, 0)
+
+  return {
+    from: start.toISOString(),
+    to: new Date(nextDayStart.getTime() - 1).toISOString(),
+  }
+
+}
+
+
+/*
   Resolves a UI-level tooth selection (some picked tooth groups, plus
   some individually picked teeth) into the deduplicated toothIds list
   a StatisticsFilters actually uses. Returns null (meaning "no tooth
