@@ -932,12 +932,14 @@ button:disabled:hover {
   /*
     Always a 2x2 grid, at every width (iPad portrait and landscape,
     phone): four large tiles instead of a thin row of four. The cap
-    keeps the tiles a comfortable size on a wide screen. Each tile is at
-    least 96px tall (the tap target is far above 44px), with a 32px icon
-    over a 16px label that may wrap to two lines, so the full label text
-    ("Manage Procedure Templates") is always shown.
+    keeps the tiles a comfortable size on a wide screen, and matches the
+    600px width of the patient search box and list directly below, so
+    their edges line up. Each tile is at least 96px tall (the tap target
+    is far above 44px), with a 32px icon over a 16px label that may wrap
+    to two lines, so the full label text ("Manage Procedure Templates")
+    is always shown.
   */
-  max-width: 520px;
+  max-width: 600px;
   margin: 0 auto var(--space-6) auto;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
