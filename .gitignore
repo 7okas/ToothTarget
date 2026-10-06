@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Exported data backups contain patient data - never commit them
+toothtarget-backup*.json
+*backup*.json
