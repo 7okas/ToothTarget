@@ -974,6 +974,30 @@ button:disabled:hover {
   line-height: 1;
 }
 
+/*
+  SHORT SCREENS (landscape iPad, a short desktop window): the 96px tiles
+  push the patient list below the fold, so the tiles drop to 80px with a
+  28px icon and tighter padding. 840px is the cut-off because it covers
+  every 10-11 inch iPad in landscape (e.g. 1024x768, 1180x820, 1194x834)
+  while leaving portrait iPads and larger screens on the full 96px tiles.
+  The tap target is still far above 44px and the labels are unchanged.
+*/
+@media (max-height: 840px) {
+  .home-nav-grid {
+    gap: var(--space-2);
+  }
+
+  .home-nav-grid button {
+    min-height: 80px;
+    padding: var(--space-3);
+    gap: var(--space-1);
+  }
+
+  .home-nav-icon {
+    font-size: 28px;
+  }
+}
+
 
 /* ===========================
    Patient-number conflicts (Home)
