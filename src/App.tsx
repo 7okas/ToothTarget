@@ -269,24 +269,9 @@ export type Patient = {
 }
 
 /*
-  DELETION TOMBSTONES (multi-device sync)
-
-  Record of "this Patient/ProcedureTemplate/SavedTreatment/Procedure
-  UUID was deleted here" - read by cloudMerge.ts's
-  mergeCloudSyncDocuments() on every sync to suppress a deleted record
-  from resurrecting via another device's still-live copy. id is the
-  tombstone's own identity (crypto.randomUUID()), separate from
-  entityId (the UUID of the thing that was deleted) - deliberately
-  carries no patient name or other descriptive content, since a merge
-  only ever needs to answer "was this UUID deleted?". 'procedure'
-  (Phase 5.5) was recorded by the old delete-a-custom-procedure flow,
-  mirroring exactly how 'procedureTemplate' is recorded by
-  deleteTemplateFromRegistry(). As of Phase 2 of the Sync &
-  Statistics Redesign, procedures are archived rather than deleted
-  (setProcedureArchiveStatusInRegistry() below) and no longer create
-  new 'procedure' tombstones - this entityType is kept only so any
-  tombstone already recorded by the old flow, on data synced before
-  this change, still reads and merges correctly (see cloudMerge.ts).
+  RETIRED: deletions no longer leave a tombstone behind. This type only
+  survives for the old merge/stale-review modules that are removed in
+  the next steps of Phase 7.
 */
 
 export type DeletionTombstone = {
@@ -683,7 +668,6 @@ const BACKUP_STORAGE_KEYS = [
   'toothTargetActiveTreatment',
   'toothTargetTemplates',
   'toothTargetProcedures',
-  'toothTargetDeletionTombstones',
 ] as const
 
 function downloadTextFile(
@@ -1586,23 +1570,6 @@ function isValidPatient(value: unknown): value is Patient {
 
 }
 
-function isValidTombstone(value: unknown): value is DeletionTombstone {
-
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    typeof (value as DeletionTombstone).id === 'string' &&
-    (value as DeletionTombstone).id.trim() !== '' &&
-    ((value as DeletionTombstone).entityType === 'patient' ||
-      (value as DeletionTombstone).entityType === 'procedureTemplate' ||
-      (value as DeletionTombstone).entityType === 'treatment') &&
-    typeof (value as DeletionTombstone).entityId === 'string' &&
-    (value as DeletionTombstone).entityId.trim() !== '' &&
-    typeof (value as DeletionTombstone).deletedAt === 'string'
-  )
-
-}
-
 function migratePatientIdentity({
   rawPatients,
   savedTreatments,
@@ -2122,10 +2089,7 @@ function migrateTreatmentPatientNames<
   fallback name, which only exists to keep a broken local-only record
   from crashing the app. If a saved treatment's patientId doesn't
   resolve to any currently-existing patient (the patient was deleted,
-  or the id was never valid), the treatment is removed outright and
-  tombstoned (entityType: 'treatment') so the deletion is honest,
-  propagates through cloud sync, and the record can never silently
-  reappear via a merge with another device's older copy of it.
+  or the id was never valid), the treatment is removed outright.
 
   IMPORTANT: a saved treatment whose patientName is exactly
   UNKNOWN_PATIENT_NAME_FALLBACK is treated the SAME as one with no
@@ -2135,7 +2099,7 @@ function migrateTreatmentPatientNames<
   went through that older logic and got persisted with that literal
   string would otherwise look like a perfectly valid string here
   (non-empty, a real string) and be silently kept forever, never
-  reaching the removal/tombstone path below. Checking for the sentinel
+  reaching the removal path below. Checking for the sentinel
   value explicitly lets this migration self-heal that already-persisted
   state too, not just a genuinely-missing patientName. (The one
   theoretical false positive - a real patient actually named literally
@@ -2206,86 +2170,6 @@ function migrateSavedTreatmentPatientNames(
   computing the same "next" number. Falls back to running
   unprotected only if a browser genuinely lacks the Locks API.
 */
-
-/*
-  DELETION TOMBSTONES - PERSISTENCE
-
-  Shared by patient deletion and custom-template deletion below.
-  readPersistedTombstones() always re-reads localStorage directly
-  (never React state) so it reflects whatever the most recent write -
-  from this tab or another - actually persisted. appendTombstone()
-  does the full "re-read current list, skip if an equivalent
-  tombstone already exists, otherwise append and write back" sequence
-  in one place, so both deletion paths call the exact same logic
-  rather than each re-implementing their own idempotency check.
-*/
-
-const DELETION_TOMBSTONES_KEY = 'toothTargetDeletionTombstones'
-
-function readPersistedTombstones(): DeletionTombstone[] {
-
-  try {
-
-    const raw = localStorage.getItem(DELETION_TOMBSTONES_KEY)
-
-    if (!raw) {
-      return []
-    }
-
-    const parsed = JSON.parse(raw)
-
-    return Array.isArray(parsed) ? parsed.filter(isValidTombstone) : []
-
-  } catch {
-
-    return []
-
-  }
-
-}
-
-function hasTombstoneFor(
-  tombstones: DeletionTombstone[],
-  entityType: DeletionTombstone['entityType'],
-  entityId: string
-): boolean {
-
-  return tombstones.some(
-    tombstone =>
-      tombstone.entityType === entityType &&
-      tombstone.entityId === entityId
-  )
-
-}
-
-function appendTombstone(
-  entityType: DeletionTombstone['entityType'],
-  entityId: string
-): DeletionTombstone[] {
-
-  const currentTombstones = readPersistedTombstones()
-
-  if (hasTombstoneFor(currentTombstones, entityType, entityId)) {
-    return currentTombstones
-  }
-
-  const newTombstone: DeletionTombstone = {
-    id: crypto.randomUUID(),
-    entityType,
-    entityId,
-    deletedAt: new Date().toISOString(),
-  }
-
-  const updatedTombstones = [...currentTombstones, newTombstone]
-
-  localStorage.setItem(
-    DELETION_TOMBSTONES_KEY,
-    JSON.stringify(updatedTombstones)
-  )
-
-  return updatedTombstones
-
-}
 
 /*
   CUSTOM TEMPLATE updatedAt MIGRATION (cloud sync foundation, Phase 2)
@@ -2687,21 +2571,15 @@ async function allocatePatient(
   touches toothTargetNextPatientNumber or any other patient's own
   fields, so numbers stay permanent and are never reused.
 
-  Also records a deletion tombstone for the same patient UUID, inside
-  the same lock and the same fresh-read - so the tombstone write can
-  never race a concurrent delete/create either. appendTombstone()
-  itself is idempotent (skips if a tombstone for this entityId
-  already exists), so deleting an already-tombstoned patient again
-  (eg. a stale second click, or two tabs both requesting the same
-  delete) never creates a duplicate.
+  Deleting simply removes the record - nothing is left behind. Deleting
+  an already-removed patient again (eg. a stale second click, or two
+  tabs both requesting the same delete) is a harmless no-op.
 */
 
 type PatientDeletionResult = {
   patients: Patient[]
-  tombstones: DeletionTombstone[]
   /*
-    True only when this call actually removed a patient (and recorded
-    its tombstone) - false for the "already gone" no-op case (eg.
+    True only when this call actually removed a patient - false for the "already gone" no-op case (eg.
     another tab deleted it first). Lets confirmDeletePatient() below
     request a cloud sync only when the synchronized state genuinely
     changed.
@@ -2720,15 +2598,13 @@ function removePatientFromCurrentList(
 
   /*
     Already gone (eg. another tab already deleted this exact patient)
-    - nothing left to remove or tombstone. Still returns the current
-    tombstones so the caller can keep its own state in sync.
+    - nothing left to remove.
   */
 
   if (!patientExists) {
 
     return {
       patients: currentPatients,
-      tombstones: readPersistedTombstones(),
       deleted: false,
     }
 
@@ -2742,11 +2618,8 @@ function removePatientFromCurrentList(
     JSON.stringify(updatedPatients)
   )
 
-  const updatedTombstones = appendTombstone('patient', patientId)
-
   return {
     patients: updatedPatients,
-    tombstones: updatedTombstones,
     deleted: true,
   }
 
@@ -2999,8 +2872,7 @@ async function editPatientRecord(
   against its own kind of concurrent write). Only ever removes a
   template that is BOTH found in the current persisted list AND
   isCustom === true - a built-in template (or a template that's
-  somehow already gone) is left completely untouched, and no
-  tombstone is created for it either, matching the existing UI (no
+  somehow already gone) is left completely untouched, matching the existing UI (no
   delete button is ever shown for a built-in template).
 */
 
@@ -3008,10 +2880,8 @@ const TEMPLATE_DELETION_LOCK_NAME = 'toothtarget-template-deletion'
 
 type TemplateDeletionResult = {
   templates: ProcedureTemplate[]
-  tombstones: DeletionTombstone[]
   /*
-    True only when a custom template was actually removed (and its
-    tombstone recorded) - false for the "not found / not custom"
+    True only when a custom template was actually removed - false for the "not found / not custom"
     no-op case. Lets confirmDeleteTemplate() below request a cloud
     sync only when the synchronized state genuinely changed.
   */
@@ -3031,7 +2901,6 @@ function removeTemplateFromCurrentList(
 
     return {
       templates: currentTemplates,
-      tombstones: readPersistedTombstones(),
       deleted: false,
     }
 
@@ -3045,12 +2914,8 @@ function removeTemplateFromCurrentList(
     JSON.stringify(updatedTemplates)
   )
 
-  const updatedTombstones =
-    appendTombstone('procedureTemplate', templateId)
-
   return {
     templates: updatedTemplates,
-    tombstones: updatedTombstones,
     deleted: true,
   }
 
@@ -3086,19 +2951,14 @@ async function deleteTemplateFromRegistry(
   no destructive delete - every procedure (tag), including a former
   built-in, can be archived, and archiving only ever sets status:
   'archived' + bumps updatedAt on the EXISTING record. Nothing is
-  removed from toothTargetProcedures and no tombstone is written, so:
+  removed from toothTargetProcedures, so:
   - an archived tag is simply filtered out of the "start a new
     treatment" picker (see isProcedureActive() below / the
     procedureSelect screen), while remaining fully intact for Edit,
     Unarchive, and for resolving the name/phase-set of any past
     treatment that still points at it.
-  - a sync/merge between two devices treats an archive exactly like
-    any other field edit (same id, newer updatedAt wins) - no special
-    tombstone-suppression logic is needed for it going forward. Old
-    'procedure' tombstones already recorded by the previous
-    delete-based flow (on data synced before this change) are still
-    read and honored during merge (see cloudMerge.ts) - this flow
-    just never creates new ones.
+  - an archive is just another field edit on the same record, so it
+    syncs like any other change.
 
   Re-reads the registry fresh under the same cross-tab lock the old
   delete flow used, for the identical "don't lose a concurrent tab's
@@ -3284,7 +3144,7 @@ const [savedPatients, setSavedPatients] =
 /*
   PATIENT-NUMBER CONFLICTS (Phase 4)
 
-  Unlike tombstones/nextPatientNumber below, this DOES need React
+  Unlike nextPatientNumber below, this DOES need React
   state: the whole point of this phase is to display an unresolved-
   conflict badge and let the dentist act on it, so a value that's
   only ever written and never rendered doesn't apply here. Always
@@ -3354,19 +3214,6 @@ const [staleReviewActionError, setStaleReviewActionError] =
 */
 const [staleReviewReturnActive, setStaleReviewReturnActive] =
   useState(false)
-
-/*
-  Like toothTargetNextPatientNumber below, deletion tombstones are
-  deliberately NOT kept in React state either - nothing displays them
-  yet (no cloud merge/UI consumes them in this task), so a state that
-  only ever gets written and never read would be dead weight (the
-  same reasoning that removed nextPatientNumber from state earlier).
-  readPersistedTombstones()/appendTombstone() (above App()) are
-  always called fresh at the moment they're actually needed - by
-  confirmDeletePatient()/confirmDeleteTemplate(), and by the storage-
-  event listener below, which still validates a cross-tab tombstone
-  write but has no state to reconcile it into.
-*/
 
 /*
   toothTargetNextPatientNumber itself is deliberately NOT kept in
@@ -4221,33 +4068,24 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
         activeTreatmentNameResult?.treatment ?? migratedIdentity.activeTreatment
 
       /*
-        Each orphaned saved treatment is tombstoned (never just dropped
-        silently) so its removal propagates through cloud sync instead
-        of reappearing from another device's older copy on a future
-        merge. appendTombstone() already reads/writes
-        toothTargetDeletionTombstones directly - the same helper
-        confirmDeletePatient()/confirmDeleteTemplate() use - so this
-        needs no new persistence logic of its own.
+        Orphaned saved treatments (no matching patient) are simply
+        dropped. The retired tombstone key is cleared here too, so any
+        leftover data from older versions disappears on this load.
       */
 
-      for (const orphanedId of savedTreatmentNameResult.orphanedTreatmentIds) {
-        appendTombstone('treatment', orphanedId)
-      }
+      localStorage.removeItem('toothTargetDeletionTombstones')
 
       if (savedTreatmentNameResult.orphanedTreatmentIds.length > 0) {
 
         console.log(
-          `Removed ${savedTreatmentNameResult.orphanedTreatmentIds.length} saved treatment(s) with no matching patient (tombstoned): ${savedTreatmentNameResult.orphanedTreatmentIds.join(', ')}`
+          `Removed ${savedTreatmentNameResult.orphanedTreatmentIds.length} saved treatment(s) with no matching patient: ${savedTreatmentNameResult.orphanedTreatmentIds.join(', ')}`
         )
 
         /*
-          Every other tombstone-writing mutation in the app (patient
-          deletion, template deletion) requests a sync immediately
-          after committing its tombstone - this load-time cleanup
-          should be no different, or the tombstone sits local-only
-          until some unrelated mutation happens to trigger the next
-          sync. Gated on orphanedTreatmentIds.length so a normal load
-          with nothing to clean up never fires a sync on its own.
+          Like every other synchronized mutation, request a sync right
+          after the cleanup is committed. Gated on
+          orphanedTreatmentIds.length so a normal load with nothing to
+          clean up never fires a sync on its own.
         */
         requestCloudSync()
 
@@ -4283,7 +4121,7 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
         allow, not the "deriving state from a changing prop" anti-
         pattern it flags: there is no reactive input here to instead
         compute during render. It also performs real side effects
-        (tombstone writes, requestCloudSync(), console logging)
+        (requestCloudSync(), console logging)
         interleaved with committing SEVEN independent pieces of state
         (this one plus setPatientNumberConflicts/setActiveTreatment/
         setShowResumePrompt below, and setSavedPatients/
@@ -4622,7 +4460,7 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
     deletePatientFromRegistry(), or deleteTemplateFromRegistry()
     below) already update its own state directly, so this only has to
     handle "some OTHER open tab changed toothTargetPatients/
-    toothTargetTemplates/toothTargetDeletionTombstones" by adopting
+    toothTargetTemplates" by adopting
     that new value. This is purely a display/state-freshness
     reconciliation - it never decides a patientNumber or performs a
     deletion itself, so it doesn't need (and isn't) either lock above.
@@ -4718,41 +4556,6 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
 
           console.log(
             'Could not sync templates from another tab.'
-          )
-
-        }
-
-      }
-
-      if (event.key === 'toothTargetDeletionTombstones') {
-
-        /*
-          No React state mirrors tombstones (see the comment by
-          savedPatients' declaration) - still validated here so a
-          malformed cross-tab write is logged rather than silently
-          ignored, even though there's nothing to reconcile it into
-          yet. A future consumer would call readPersistedTombstones()
-          fresh at the moment it's actually needed, exactly like
-          toothTargetNextPatientNumber already does for its counter.
-        */
-
-        try {
-
-          const parsed =
-            event.newValue ? JSON.parse(event.newValue) : []
-
-          if (!Array.isArray(parsed) || !parsed.every(isValidTombstone)) {
-
-            console.log(
-              'Received a malformed deletion tombstone list from another tab.'
-            )
-
-          }
-
-        } catch {
-
-          console.log(
-            'Could not read deletion tombstones from another tab.'
           )
 
         }
@@ -6820,7 +6623,7 @@ async function openPatient(
     confirm modal is open, clearing selectedHistoryTreatment, and which
     screen to land on afterward) - factored out so
     confirmDiscardStaleReviewPatient() (the review screen's "Discard"
-    action) can reuse the EXACT same cascade-plan/tombstone/sync logic
+    action) can reuse the EXACT same cascade-plan/sync logic
     a normal patient deletion already uses, per this phase's own
     requirement that discarding "behave like a normal deletion", not a
     second, parallel implementation of it. Takes an explicit id/name
@@ -6888,8 +6691,7 @@ async function openPatient(
       loaded it. This only removes the one matching entry - it never
       touches toothTargetNextPatientNumber or any other patient's own
       id/patientNumber/name, so numbers stay permanent and are never
-      reused. A deletion tombstone for the same UUID is recorded as
-      part of the same locked operation - see removePatientFromCurrentList().
+      reused. See removePatientFromCurrentList().
     */
 
     const registryResult =
@@ -6915,8 +6717,8 @@ async function openPatient(
     )
 
     /*
-      TREATMENT / HISTORY CLEANUP (Phase 4.5 - now tombstones saved
-      treatments too, applying the plan computed above)
+      TREATMENT / HISTORY CLEANUP (Phase 4.5 - applying the plan
+      computed above)
     */
 
     setSavedTreatments(cascadePlan.survivingSavedTreatments)
@@ -6925,22 +6727,6 @@ async function openPatient(
       'toothTargetSavedTreatments',
       JSON.stringify(cascadePlan.survivingSavedTreatments)
     )
-
-    /*
-      Each removed saved treatment is tombstoned (never just dropped
-      silently) so its removal propagates through cloud sync instead
-      of reappearing from another device's older copy on a future
-      merge - the exact same pattern the orphaned-treatment cleanup
-      migration already uses (see this file's own load-time migration
-      effect and appendTombstone()'s own comment). Without this, a
-      synced device would simply re-merge the "deleted" treatment back
-      in on its next sync, since a plain removal here has nothing to
-      tell the merge engine it was intentional.
-    */
-
-    for (const removedId of cascadePlan.removedSavedTreatmentIds) {
-      appendTombstone('treatment', removedId)
-    }
 
     setIncompleteTreatments(cascadePlan.survivingIncompleteTreatments)
 
@@ -6951,7 +6737,7 @@ async function openPatient(
 
     /*
       One coalesced sync request for the whole deletion transaction
-      (patient registry + saved-treatment cleanup + tombstones), fired
+      (patient registry + saved-treatment cleanup), fired
       only once everything above has already committed successfully -
       never between the individual steps. Skipped entirely when
       registryResult.deleted is false (eg. another tab already deleted
@@ -7050,7 +6836,7 @@ async function openPatient(
 
   /*
     Reuses deletePatientRecordAndCascade() - the exact same cascade
-    plan, tombstone, and requestCloudSync() a normal patient deletion
+    plan and requestCloudSync() a normal patient deletion
     already uses (requirement 6: discarding must behave like a real
     deletion, not a silent removal). The active-treatment block can, in
     principle, still fire here (a candidate patient could have picked up
@@ -7248,8 +7034,6 @@ async function openPatient(
       'toothTargetSavedTreatments',
       JSON.stringify(updatedTreatments)
     )
-
-    appendTombstone('treatment', treatmentId)
 
     requestCloudSync()
 
@@ -7562,7 +7346,7 @@ async function openPatient(
     deleteTemplateFromRegistry()/removeTemplateFromCurrentList() above
     App(). Only ever deletes a template that's still isCustom === true
     in that fresh read; a built-in, or a template already removed by
-    another tab, is left untouched and no tombstone is created for it.
+    another tab, is left untouched.
   */
   async function confirmDeleteTemplate() {
 
@@ -7576,8 +7360,7 @@ async function openPatient(
     setTemplates(registryResult.templates)
 
     /*
-      One sync request for the completed deletion (template removal +
-      its tombstone, both already committed inside
+      One sync request for the completed deletion (template removal, already committed inside
       deleteTemplateFromRegistry()) - skipped when nothing was
       actually deleted (eg. already removed by another tab).
     */

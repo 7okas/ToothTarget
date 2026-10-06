@@ -7,7 +7,6 @@ import type {
   SavedTreatment,
   ProcedureTemplate,
   Procedure,
-  DeletionTombstone,
 } from './App'
 
 /*
@@ -46,7 +45,7 @@ export type CloudSyncCorruptionDiagnosis =
   | { kind: 'unreadable'; reason: string }
   | {
       kind: 'invalid-record'
-      recordType: 'patient' | 'treatment' | 'template' | 'procedure' | 'tombstone'
+      recordType: 'patient' | 'treatment' | 'template' | 'procedure'
       recordDescription: string
       reason: string
     }
@@ -238,56 +237,6 @@ function diagnoseProcedure(value: unknown): string | null {
 
 }
 
-const VALID_TOMBSTONE_ENTITY_TYPES: DeletionTombstone['entityType'][] = [
-  'patient',
-  'procedureTemplate',
-  'treatment',
-  'procedure',
-]
-
-function describeTombstone(value: unknown): string {
-  const candidate = (value ?? {}) as Partial<DeletionTombstone>
-  return `Deletion record for ${describeString(candidate.entityType, 'an unknown type of')} ${describeString(candidate.entityId, 'unknown id')}`
-}
-
-function diagnoseTombstone(value: unknown): string | null {
-
-  if (!value || typeof value !== 'object') {
-    return 'is not a valid record (not an object)'
-  }
-
-  const candidate = value as Record<string, unknown>
-
-  if (typeof candidate.id !== 'string' || candidate.id.trim() === '') {
-    return 'is missing a valid id'
-  }
-
-  if (
-    typeof candidate.entityId !== 'string' ||
-    (candidate.entityId as string).trim() === ''
-  ) {
-    return 'is missing a valid entity id'
-  }
-
-  if (
-    !VALID_TOMBSTONE_ENTITY_TYPES.includes(
-      candidate.entityType as DeletionTombstone['entityType']
-    )
-  ) {
-    return 'has an unrecognized entity type'
-  }
-
-  if (
-    typeof candidate.deletedAt !== 'string' ||
-    (candidate.deletedAt as string).trim() === ''
-  ) {
-    return 'is missing a valid deleted-at date'
-  }
-
-  return null
-
-}
-
 function findDuplicateId(items: unknown[]): string | null {
 
   const seenIds = new Set<string>()
@@ -320,9 +269,8 @@ function findDuplicateId(items: unknown[]): string | null {
   validateCloudSyncDocument() has already rejected the result - never
   called on a document that parses AND validates. Walks the document
   in the same field order cloudSync.ts's own validator uses
-  (patients -> savedTreatments -> customTemplates -> customProcedures
-  -> deletionTombstones), so the first thing this function finds wrong
-  is, in practice, consistent with what actually caused the rejection.
+  (patients -> savedTreatments -> customTemplates -> customProcedures),
+  so the first thing this function finds wrong is, in practice, consistent with what actually caused the rejection.
 */
 export function diagnoseCloudSyncDocumentFailure(
   value: unknown
@@ -471,25 +419,6 @@ export function diagnoseCloudSyncDocumentFailure(
       recordType: 'procedure',
       recordDescription: `Procedure id ${duplicateProcedureId}`,
       reason: 'this procedure id appears more than once in the cloud file',
-    }
-  }
-
-  if (!Array.isArray(candidate.deletionTombstones)) {
-    return {
-      kind: 'unreadable',
-      reason: "The cloud file's deletion-record list is missing or not a list.",
-    }
-  }
-
-  for (const tombstone of candidate.deletionTombstones) {
-    const reason = diagnoseTombstone(tombstone)
-    if (reason) {
-      return {
-        kind: 'invalid-record',
-        recordType: 'tombstone',
-        recordDescription: describeTombstone(tombstone),
-        reason,
-      }
     }
   }
 

@@ -541,7 +541,7 @@ describe('applyResolution - happy path', () => {
       'dev-only:Sara K.',
       'shared:Ahmed Samy',
     ])
-    expect(cloudDoc.deletionTombstones).toEqual([])
+    expect('deletionTombstones' in cloudDoc).toBe(false)
 
     // Local data replaced to match.
     expect(readLocalPatients().map(p => p.id).sort()).toEqual(['cloud-only', 'dev-only', 'shared'])

@@ -149,7 +149,6 @@ function makeCloudDocument(
     savedTreatments: [],
     customTemplates: [],
     customProcedures: [],
-    deletionTombstones: [],
     ...overrides,
   }
 }
@@ -288,7 +287,7 @@ describe('reconcileSyncedAccount - carries the new change-tracking fields per ac
 
 describe('pushLocalSnapshot - first push (cloud absent)', () => {
 
-  it('writes with expectedETag null, stamps a fresh updatedAt, forces deletionTombstones to [], and records success locally', async () => {
+  it('writes with expectedETag null, stamps a fresh updatedAt, never writes deletionTombstones, and records success locally', async () => {
 
     seedLocalSynchronizedData({
       patients: [makePatient({ id: 'a' })],
@@ -309,7 +308,7 @@ describe('pushLocalSnapshot - first push (cloud absent)', () => {
     expect(mockedWrite).toHaveBeenCalledTimes(1)
     const [writtenDocument, expectedETag] = mockedWrite.mock.calls[0]
     expect(expectedETag).toBeNull()
-    expect(writtenDocument.deletionTombstones).toEqual([])
+    expect('deletionTombstones' in writtenDocument).toBe(false)
     expect(writtenDocument.patients).toEqual([makePatient({ id: 'a' })])
     expect(writtenDocument.savedTreatments).toEqual([makeSavedTreatment()])
 
@@ -845,7 +844,7 @@ describe('pullCloudSnapshot - cloud absent', () => {
 
 describe('pullCloudSnapshot - clean local, cloud found: adopts wholesale (Amendment 3)', () => {
 
-  it('replaces patients/savedTreatments/custom templates/procedures with the cloud snapshot, leaves tombstones untouched, and writes a pre-adopt safety copy of the OLD local data', async () => {
+  it('replaces patients/savedTreatments/custom templates/procedures with the cloud snapshot, drops the retired tombstone key, and writes a pre-adopt safety copy of the OLD local data', async () => {
 
     seedLocalSynchronizedData({
       patients: [makePatient({ id: 'old-local-patient' })],
@@ -891,9 +890,8 @@ describe('pullCloudSnapshot - clean local, cloud found: adopts wholesale (Amendm
     const templates = JSON.parse(localStorage.getItem('toothTargetTemplates')!)
     expect(templates.map((t: { id: string }) => t.id).sort()).toEqual(['custom-t', 'general'])
 
-    // Local tombstones are left exactly as they were - not adopted from
-    // the (always-empty) cloud field, not cleared either.
-    expect(JSON.parse(localStorage.getItem('toothTargetDeletionTombstones')!)).toHaveLength(1)
+    // The retired tombstone key is dropped on adopt.
+    expect(localStorage.getItem('toothTargetDeletionTombstones')).toBeNull()
 
     // The pre-adopt safety copy holds what local had BEFORE this overwrite.
     const safetyCopy = JSON.parse(localStorage.getItem('toothTargetPreAdoptSafetyCopy')!)

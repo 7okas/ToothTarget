@@ -336,7 +336,6 @@ function makeCloudDocument(
     savedTreatments: [],
     customTemplates: [],
     customProcedures: [],
-    deletionTombstones: [],
     ...overrides,
   }
 }

@@ -626,7 +626,6 @@ export function resolveSnapshots(
       savedTreatments: treatments,
       customTemplates: resolvedTemplates,
       customProcedures: resolvedProcedures,
-      deletionTombstones: [],
     })
 
     if (validation.valid) {

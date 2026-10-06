@@ -11,10 +11,10 @@ import type {
 import {
   CLOUD_SYNC_SCHEMA_VERSION,
   CLOUD_SYNC_APP,
-  type CloudSyncDocument,
 } from './cloudSync'
 
 import {
+  type CloudSyncDocument,
   mergeCloudSyncDocuments,
   pruneExpiredTombstones,
   TOMBSTONE_EXPIRY_MS,

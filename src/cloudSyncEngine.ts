@@ -77,8 +77,7 @@ import type { StaleReviewCandidate } from './staleRecordReview'
     toothTargetProcedures (Phase 2, Sync & Statistics Redesign: EVERY
     entry, not just isCustom ones - every procedure is now a
     renamable/archivable tag, including former "built-ins", and a
-    rename/archive on one device must reach every other device),
-    toothTargetDeletionTombstones
+    rename/archive on one device must reach every other device)
 
   Local-only (never read, written, or referenced by this file):
     toothTargetActiveTreatment, toothTargetIncompleteTreatments,
@@ -125,7 +124,12 @@ const PATIENTS_KEY = 'toothTargetPatients'
 const SAVED_TREATMENTS_KEY = 'toothTargetSavedTreatments'
 const TEMPLATES_KEY = 'toothTargetTemplates'
 const PROCEDURES_KEY = 'toothTargetProcedures'
-const TOMBSTONES_KEY = 'toothTargetDeletionTombstones'
+/*
+  Retired: deletions no longer leave a record behind. Old devices still
+  have this key (and old per-account caches still carry the same field);
+  both are ignored on read and dropped on the next save.
+*/
+const RETIRED_TOMBSTONES_KEY = 'toothTargetDeletionTombstones'
 const NEXT_PATIENT_NUMBER_KEY = 'toothTargetNextPatientNumber'
 
 /*
@@ -361,7 +365,6 @@ export function buildLocalCloudSyncDocument():
   const savedTreatments = readLocalArray(SAVED_TREATMENTS_KEY) as SavedTreatment[]
   const templates = readLocalArray(TEMPLATES_KEY) as ProcedureTemplate[]
   const procedures = readLocalArray(PROCEDURES_KEY) as Procedure[]
-  const deletionTombstones = readLocalArray(TOMBSTONES_KEY)
 
   const candidate = {
     schemaVersion: CLOUD_SYNC_SCHEMA_VERSION,
@@ -373,7 +376,6 @@ export function buildLocalCloudSyncDocument():
       template => template.isCustom === true
     ),
     customProcedures: procedures,
-    deletionTombstones,
   }
 
   return validateCloudSyncDocument(candidate)
@@ -667,17 +669,12 @@ export async function pushLocalSnapshot(): Promise<CloudSyncResult> {
   const nowIso = new Date().toISOString()
 
   /*
-    Per this phase's own instruction: tombstones are no longer part of
-    what's pushed (always an empty list from here on), even though local
-    deletion flows keep writing them locally, inertly, until Phase 7
-    removes that machinery too. updatedAt is stamped fresh here, for
-    THIS snapshot, rather than reused from whatever the local build step
-    read.
+    updatedAt is stamped fresh here, for THIS snapshot, rather than
+    reused from whatever the local build step read.
   */
   const documentToWrite: CloudSyncDocument = {
     ...localResult.document,
     updatedAt: nowIso,
-    deletionTombstones: [],
   }
 
   let writeResult = await writeCloudSyncDocument(documentToWrite, expectedETag)
@@ -821,7 +818,6 @@ function writePreAdoptSafetyCopy(): void {
           template => template.isCustom === true
         ),
       customProcedures: readLocalArray(PROCEDURES_KEY),
-      deletionTombstones: readLocalArray(TOMBSTONES_KEY),
     }
 
     localStorage.setItem(PRE_ADOPT_SAFETY_COPY_KEY, JSON.stringify(snapshot))
@@ -846,13 +842,7 @@ function writePreAdoptSafetyCopy(): void {
   own worth keeping, per the caller's own clean-to-adopt check), and
   templates keep this device's built-ins and replace only the custom
   ones, the same pattern commitLocalState()/applyCloudRestore() already
-  use for the identical reason. Deliberately does NOT touch
-  toothTargetDeletionTombstones - per this phase's own instruction,
-  tombstones no longer decide anything in the normal path, so there is
-  nothing meaningful to adopt from the cloud's (always-empty, from this
-  phase on) field, and nothing to overwrite locally either; local
-  deletion flows keep writing their own copies there, inertly, until
-  Phase 7.
+  use for the identical reason.
 */
 function adoptCloudSnapshotLocally(
   document: CloudSyncDocument,
@@ -882,6 +872,8 @@ function adoptCloudSnapshotLocally(
     PROCEDURES_KEY,
     JSON.stringify(document.customProcedures)
   )
+
+  localStorage.removeItem(RETIRED_TOMBSTONES_KEY)
 
   const storedNextPatientNumber = readPersistedNextPatientNumber()
 
@@ -1112,6 +1104,8 @@ export function replaceLocalSyncedData(document: CloudSyncDocument): void {
     JSON.stringify(document.customProcedures)
   )
 
+  localStorage.removeItem(RETIRED_TOMBSTONES_KEY)
+
   const highestAssignedPatientNumber =
     document.patients.reduce(
       (highest, patient) =>
@@ -1326,7 +1320,6 @@ type AccountLocalCache = {
   savedTreatments: unknown[]
   customTemplates: unknown[]
   customProcedures: unknown[]
-  deletionTombstones: unknown[]
   /*
     toothTargetNextPatientNumber is otherwise local-only/never-synced
     (see this file's own top header comment) - but unlike other
@@ -1412,7 +1405,6 @@ function captureCurrentAccountState(): AccountLocalCache {
       templates/patients/treatments.
     */
     customProcedures: readLocalArray(PROCEDURES_KEY) as Procedure[],
-    deletionTombstones: readLocalArray(TOMBSTONES_KEY),
     nextPatientNumber: readPersistedNextPatientNumber(),
     cloudSyncUpdatedAt: readLocalSyncUpdatedAt(),
     cloudSyncETag: readLocalSyncETag(),
@@ -1472,7 +1464,6 @@ function readAccountCache(accountId: string): AccountLocalCache | null {
       savedTreatments: Array.isArray(candidate.savedTreatments) ? candidate.savedTreatments : [],
       customTemplates: Array.isArray(candidate.customTemplates) ? candidate.customTemplates : [],
       customProcedures: Array.isArray(candidate.customProcedures) ? candidate.customProcedures : [],
-      deletionTombstones: Array.isArray(candidate.deletionTombstones) ? candidate.deletionTombstones : [],
       nextPatientNumber:
         typeof candidate.nextPatientNumber === 'number' && candidate.nextPatientNumber > 0
           ? candidate.nextPatientNumber
@@ -1551,10 +1542,7 @@ function applyAccountCacheToLocalStorage(cache: AccountLocalCache | null): void 
     JSON.stringify(cache?.customProcedures ?? [])
   )
 
-  localStorage.setItem(
-    TOMBSTONES_KEY,
-    JSON.stringify(cache?.deletionTombstones ?? [])
-  )
+  localStorage.removeItem(RETIRED_TOMBSTONES_KEY)
 
   if (cache) {
     localStorage.setItem(NEXT_PATIENT_NUMBER_KEY, JSON.stringify(cache.nextPatientNumber))

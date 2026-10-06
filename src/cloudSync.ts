@@ -3,7 +3,6 @@ import type {
   SavedTreatment,
   ProcedureTemplate,
   Procedure,
-  DeletionTombstone,
 } from './App'
 
 /*
@@ -20,8 +19,7 @@ import type {
   This module only answers one question: "is this structurally a
   valid ToothTarget sync document, version 2?" - it never decides
   which record wins, whether a patient-number collision exists, or
-  whether a tombstone should suppress a record; that's cloudMerge.ts's
-  job. validateCloudSyncDocument() is called on every sync, both when
+  whether a record was deleted. validateCloudSyncDocument() is called on every sync, both when
   reading the cloud document (cloudStorage.ts's readCloudSyncDocument())
   and when about to write one (writeCloudSyncDocument()), via
   cloudSyncEngine.ts's syncCloudNow() - the automatic sync engine that
@@ -47,7 +45,6 @@ export type CloudSyncDocument = {
   savedTreatments: SavedTreatment[]
   customTemplates: ProcedureTemplate[]
   customProcedures: Procedure[]
-  deletionTombstones: DeletionTombstone[]
 }
 
 /*
@@ -241,43 +238,13 @@ function isValidSyncProcedure(value: unknown): value is Procedure {
 
 }
 
-const VALID_TOMBSTONE_ENTITY_TYPES: DeletionTombstone['entityType'][] = [
-  'patient',
-  'procedureTemplate',
-  'treatment',
-  'procedure',
-]
-
-function isValidSyncTombstone(value: unknown): value is DeletionTombstone {
-
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    typeof (value as DeletionTombstone).id === 'string' &&
-    (value as DeletionTombstone).id.trim() !== '' &&
-    typeof (value as DeletionTombstone).entityId === 'string' &&
-    (value as DeletionTombstone).entityId.trim() !== '' &&
-    VALID_TOMBSTONE_ENTITY_TYPES.includes(
-      (value as DeletionTombstone).entityType
-    ) &&
-    typeof (value as DeletionTombstone).deletedAt === 'string' &&
-    (value as DeletionTombstone).deletedAt.trim() !== ''
-  )
-
-}
-
 /*
   DUPLICATE-ID CHECK
 
   Only ever called on an array that has already passed its per-record
   validator (so every item's id is confirmed to be a real, non-empty
   string) - rejects a document where the same id appears twice within
-  ONE entity array. Deliberately NOT applied to deletionTombstones:
-  two different tombstone records legitimately targeting the same
-  (entityType, entityId) is an expected, tolerated case (eg. two
-  devices independently deleting the same record before ever syncing)
-  - cloudMerge.ts dedupes those by (entityType, entityId), it is not
-  this validator's job to reject the document over it.
+  ONE entity array.
 */
 
 function hasDuplicateIds(items: { id: string }[]): boolean {
@@ -426,15 +393,13 @@ export function validateCloudSyncDocument(
     }
   }
 
-  if (
-    !Array.isArray(candidate.deletionTombstones) ||
-    !candidate.deletionTombstones.every(isValidSyncTombstone)
-  ) {
-    return {
-      valid: false,
-      error: 'The cloud sync document contains invalid deletion tombstones.',
-    }
-  }
+  /*
+    deletionTombstones is a retired field: documents written before the
+    single-writer sync model carry it, newer ones don't. Whatever is
+    there (a valid list, garbage, or nothing at all) is ignored and
+    never causes a rejection; it is simply not copied into the result,
+    so it disappears on the next save.
+  */
 
   return {
     valid: true,
@@ -446,7 +411,6 @@ export function validateCloudSyncDocument(
       savedTreatments: candidate.savedTreatments,
       customTemplates: candidate.customTemplates,
       customProcedures: candidate.customProcedures,
-      deletionTombstones: candidate.deletionTombstones,
     },
   }
 

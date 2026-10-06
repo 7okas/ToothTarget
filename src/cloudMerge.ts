@@ -3,7 +3,16 @@ import type {
   DeletionTombstone,
 } from './App'
 
-import type { CloudSyncDocument } from './cloudSync'
+import type { CloudSyncDocument as SyncDocumentBase } from './cloudSync'
+
+/*
+  TEMPORARY (removed with this file in Phase 7 step 3): the retired
+  deletionTombstones field is no longer part of the real sync document,
+  but this dead merge code still reads it.
+*/
+export type CloudSyncDocument = SyncDocumentBase & {
+  deletionTombstones: DeletionTombstone[]
+}
 
 /*
   CLOUD MERGE ENGINE (Phase 3 - pure, in-memory, offline)

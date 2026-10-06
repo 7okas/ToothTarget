@@ -129,7 +129,7 @@ describe('resolveSnapshots - choices', () => {
 
   })
 
-  it('result is a valid v2 document with fresh updatedAt and no tombstones', () => {
+  it('result is a valid v2 document with fresh updatedAt and no tombstone field', () => {
 
     const result = resolve(makeDocument(), makeDocument(), {})
 
@@ -137,8 +137,9 @@ describe('resolveSnapshots - choices', () => {
       schemaVersion: 2,
       app: 'ToothTarget',
       updatedAt: NOW,
-      deletionTombstones: [],
     })
+
+    expect('deletionTombstones' in result.document!).toBe(false)
 
   })
 

@@ -265,7 +265,7 @@ describe('reconcileSyncedAccount - per-account local caches (Phase 4)', () => {
     // The account-specific keys are all empty for the never-seen-before account.
     expect(readKey<Patient[]>('toothTargetPatients')).toEqual([])
     expect(readKey<SavedTreatment[]>('toothTargetSavedTreatments')).toEqual([])
-    expect(readKey<DeletionTombstone[]>('toothTargetDeletionTombstones')).toEqual([])
+    expect(localStorage.getItem('toothTargetDeletionTombstones')).toBeNull()
     expect(readKey<Procedure[]>('toothTargetProcedures')).toEqual([])
 
     // Built-in templates survive; the previous account's custom one does not.

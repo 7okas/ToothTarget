@@ -94,7 +94,6 @@ export function makeDocument(
     savedTreatments: [],
     customTemplates: [],
     customProcedures: [],
-    deletionTombstones: [],
     ...overrides,
   }
 }

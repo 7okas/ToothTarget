@@ -22,7 +22,6 @@ function makeDocument(
     savedTreatments: [],
     customTemplates: [],
     customProcedures: [],
-    deletionTombstones: [],
     ...overrides,
   }
 }
@@ -212,32 +211,6 @@ describe('diagnoseCloudSyncDocumentFailure - invalid-record failures identify th
     expect(diagnosis.recordType).toBe('procedure')
     expect(diagnosis.recordDescription).toContain('Filling')
     expect(diagnosis.reason).toContain('template id')
-
-  })
-
-  it('identifies a tombstone with an unrecognized entity type', () => {
-
-    const diagnosis = diagnoseCloudSyncDocumentFailure(
-      makeDocument({
-        deletionTombstones: [
-          {
-            id: 'tomb-1',
-            entityType: 'not-a-real-type',
-            entityId: 'e1',
-            deletedAt: '2026-01-01T00:00:00.000Z',
-          } as unknown as CloudSyncDocument['deletionTombstones'][number],
-        ],
-      })
-    )
-
-    expect(diagnosis.kind).toBe('invalid-record')
-
-    if (diagnosis.kind !== 'invalid-record') {
-      throw new Error('expected invalid-record')
-    }
-
-    expect(diagnosis.recordType).toBe('tombstone')
-    expect(diagnosis.reason).toContain('entity type')
 
   })
 
