@@ -1243,6 +1243,31 @@ button:disabled:hover {
   color: var(--color-text-faint);
 }
 
+/* Last sync older than about 2 days: the same text in the warning colour. */
+.sync-status-relative-time-stale {
+  color: var(--color-warning-strong);
+  font-weight: var(--weight-medium);
+}
+
+/*
+  Both wordings are in the page; the long one ("Last synced 3 hours
+  ago") shows on wider screens, the short one ("3h ago") below about
+  520px so the badge does not crowd the page title.
+*/
+.sync-status-age-short {
+  display: none;
+}
+
+@media (max-width: 520px) {
+  .sync-status-age-long {
+    display: none;
+  }
+
+  .sync-status-age-short {
+    display: inline;
+  }
+}
+
 
 /* ===========================
    Startup sign-in/sync gate (Phase 6.5) - full-screen, shown before

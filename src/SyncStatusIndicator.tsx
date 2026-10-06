@@ -10,7 +10,7 @@ import {
 } from './cloudSyncScheduler'
 import { describeSyncOutcome } from './syncOutcome'
 import { getDeviceLastSyncAt } from './deviceSyncTracking'
-import { formatRelativeTime } from './format'
+import { describeLastSync } from './syncAgeText'
 import { openResolutionScreen } from './syncResolutionStore'
 import {
   reduceSyncIndicatorState,
@@ -138,12 +138,16 @@ export default function SyncStatusIndicator() {
   const detailOpen = outcome !== null && detailOpenFor === outcome
 
   /*
-    RELATIVE LAST-SYNC TIME (Phase 8 - UI polish)
+    RELATIVE LAST-SYNC TIME
 
-    Purely a re-render tick so "X minutes ago" keeps advancing while
-    the badge just sits there with no other state change - the actual
-    timestamp still comes from deviceSyncTracking.ts's
-    getDeviceLastSyncAt() on every render, never stored here.
+    Purely a re-render tick so "Synced 5 minutes ago" keeps advancing
+    while the badge just sits there with no other state change - the
+    actual timestamp still comes from deviceSyncTracking.ts's
+    getDeviceLastSyncAt() on every render, never stored here, and the
+    wording comes from syncAgeText.ts. Besides the 60-second timer the
+    time is refreshed the moment the app becomes visible again: iPad
+    timers are paused while the app is in the background, so without
+    this the text could stay stale for up to a minute after returning.
   */
   const [now, setNow] = useState(() => new Date())
 
@@ -151,14 +155,31 @@ export default function SyncStatusIndicator() {
 
     const interval = setInterval(() => setNow(new Date()), 60000)
 
-    return () => clearInterval(interval)
+    function refreshIfVisible() {
+      if (document.visibilityState === 'visible') {
+        setNow(new Date())
+      }
+    }
+
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    window.addEventListener('focus', refreshIfVisible)
+    window.addEventListener('pageshow', refreshIfVisible)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshIfVisible)
+      window.removeEventListener('focus', refreshIfVisible)
+      window.removeEventListener('pageshow', refreshIfVisible)
+    }
 
   }, [])
 
   const deviceLastSyncAt = getDeviceLastSyncAt()
 
-  const relativeSyncText =
-    deviceLastSyncAt ? formatRelativeTime(deviceLastSyncAt, now) : null
+  const lastSync = describeLastSync(deviceLastSyncAt, now, {
+    synced: status === 'synced',
+    labelShown: state.text !== null,
+  })
 
   function handleManualSync() {
 
@@ -248,7 +269,7 @@ export default function SyncStatusIndicator() {
     )
   }
 
-  if (!state.icon && !state.text && !relativeSyncText) {
+  if (!state.icon && !state.text && !lastSync) {
     return null
   }
 
@@ -277,9 +298,16 @@ export default function SyncStatusIndicator() {
         </span>
       )}
 
-      {relativeSyncText && (
-        <span className="sync-status-relative-time">
-          {relativeSyncText}
+      {lastSync && (
+        <span
+          className={
+            'sync-status-relative-time' +
+            (lastSync.stale ? ' sync-status-relative-time-stale' : '')
+          }
+        >
+          {/* Both forms are in the page; CSS shows the short one on narrow screens. */}
+          <span className="sync-status-age-long">{lastSync.long}</span>
+          <span className="sync-status-age-short">{lastSync.short}</span>
         </span>
       )}
 
