@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { SavedTreatment } from './App'
 import {
+  CHECKED_TABLE_PAGE_SIZE,
   checkAll,
   checkedIdsForFilter,
+  describeCheckedCount,
+  describeHiddenByCaseType,
+  formatSelectionSummary,
+  pageOfRows,
+  resolveCheckedTreatments,
   clearChecked,
   pruneToExisting,
   summarizeSelection,
@@ -235,6 +242,97 @@ describe('checkedTreatmentsStore - in memory, survives leaving the screen, never
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+})
+
+describe('resolveCheckedTreatments - checked AND case type', () => {
+
+  const t = (id: string) => ({ id }) as unknown as SavedTreatment
+
+  const all = [t('a'), t('b'), t('c'), t('d')]
+  // The case-type buttons currently allow only a, b and d.
+  const allowed = [t('a'), t('b'), t('d')]
+
+  it('uses exactly the treatments that are both checked and allowed, in list order', () => {
+    const result = resolveCheckedTreatments(all, allowed, set('d', 'a'))
+    expect(result.statisticsTreatments.map(x => x.id)).toEqual(['a', 'd'])
+    expect(result.existingCheckedCount).toBe(2)
+    expect(result.hiddenByCaseTypeCount).toBe(0)
+  })
+
+  it('reports checked treatments hidden by the case-type buttons instead of dropping or counting them silently', () => {
+    const result = resolveCheckedTreatments(all, allowed, set('a', 'c'))
+    expect(result.statisticsTreatments.map(x => x.id)).toEqual(['a'])
+    expect(result.existingCheckedCount).toBe(2)
+    expect(result.hiddenByCaseTypeCount).toBe(1)
+  })
+
+  it('everything checked is hidden: no statistics, all counted as hidden', () => {
+    const result = resolveCheckedTreatments(all, allowed, set('c'))
+    expect(result.statisticsTreatments).toEqual([])
+    expect(result.hiddenByCaseTypeCount).toBe(1)
+  })
+
+  it('nothing checked: no statistics and nothing hidden - an empty list, never "everything"', () => {
+    const result = resolveCheckedTreatments(all, allowed, set())
+    expect(result.statisticsTreatments).toEqual([])
+    expect(result.existingCheckedCount).toBe(0)
+    expect(result.hiddenByCaseTypeCount).toBe(0)
+  })
+
+  it('ids of deleted treatments count for nothing', () => {
+    const result = resolveCheckedTreatments(all, allowed, set('a', 'gone'))
+    expect(result.statisticsTreatments.map(x => x.id)).toEqual(['a'])
+    expect(result.existingCheckedCount).toBe(1)
+    expect(result.hiddenByCaseTypeCount).toBe(0)
+  })
+
+})
+
+describe('wording helpers', () => {
+
+  it('describeCheckedCount pluralises for the "Comparing:" line', () => {
+    expect(describeCheckedCount(0)).toBe('0 checked treatments')
+    expect(describeCheckedCount(1)).toBe('1 checked treatment')
+    expect(describeCheckedCount(12)).toBe('12 checked treatments')
+  })
+
+  it('describeHiddenByCaseType says nothing for 0 and pluralises otherwise', () => {
+    expect(describeHiddenByCaseType(0)).toBeNull()
+    expect(describeHiddenByCaseType(1)).toBe('1 checked treatment is hidden by the case-type filter')
+    expect(describeHiddenByCaseType(3)).toBe('3 checked treatments are hidden by the case-type filter')
+  })
+
+  it('formatSelectionSummary reads "N of M selected", adding the grand total only when more is checked than in view', () => {
+    expect(formatSelectionSummary(summarizeSelection(set('a', 'b'), ['a', 'b', 'c']))).toBe('2 of 3 selected')
+    expect(formatSelectionSummary(summarizeSelection(set('a', 'x', 'y'), ['a', 'b']))).toBe('1 of 2 selected (3 checked in total)')
+    expect(formatSelectionSummary(summarizeSelection(set(), []))).toBe('0 of 0 selected')
+  })
+
+})
+
+describe('pageOfRows - long lists stay responsive', () => {
+
+  const rows = Array.from({ length: 120 }, (_, index) => index)
+
+  it('the page size is 50', () => {
+    expect(CHECKED_TABLE_PAGE_SIZE).toBe(50)
+  })
+
+  it('shows the first rows up to the limit and reports how many remain', () => {
+    expect(pageOfRows(rows, 50).shown).toHaveLength(50)
+    expect(pageOfRows(rows, 50).remaining).toBe(70)
+    expect(pageOfRows(rows, 100).remaining).toBe(20)
+  })
+
+  it('a limit past the end shows everything with nothing remaining', () => {
+    expect(pageOfRows(rows, 500)).toEqual({ shown: rows, remaining: 0 })
+  })
+
+  it('an empty list or a zero limit is safe', () => {
+    expect(pageOfRows([], 50)).toEqual({ shown: [], remaining: 0 })
+    expect(pageOfRows(rows, 0)).toEqual({ shown: [], remaining: 120 })
   })
 
 })

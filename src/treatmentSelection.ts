@@ -1,4 +1,5 @@
 import type { SavedTreatment } from './App'
+import { ALL_TREATMENTS_FILTER, applyStatisticsFilters } from './statistics'
 
 /*
   CHECKED-TREATMENTS SELECTION (Statistics, Phase 8)
@@ -138,4 +139,100 @@ export function summarizeSelection(
 */
 export function checkedIdsForFilter(checked: CheckedIds): string[] {
   return Array.from(checked)
+}
+
+/*
+  CHECKED AND CASE TYPE
+
+  Statistics in checked mode are computed on the treatments that are
+  checked AND allowed by the Clinical/Practice/Both buttons. Checked
+  treatments the buttons currently hide are neither dropped silently
+  nor counted silently: they are reported as hiddenByCaseTypeCount so
+  the screen can say so.
+
+  `allTreatments` is every saved treatment, `caseTypeAllowed` is that
+  list after the case-type buttons. Ids with no treatment (deleted)
+  count for nothing. The narrowing itself is the ordinary statistics
+  filter's treatmentIds, so it is exactly the same engine as the presets.
+*/
+
+export type CheckedResolution = {
+  /* What every statistic is computed on. */
+  statisticsTreatments: SavedTreatment[]
+  /* Checked treatments that still exist (before the case-type buttons). */
+  existingCheckedCount: number
+  /* Checked, existing, but hidden by the case-type buttons. */
+  hiddenByCaseTypeCount: number
+}
+
+export function resolveCheckedTreatments(
+  allTreatments: SavedTreatment[],
+  caseTypeAllowed: SavedTreatment[],
+  checked: CheckedIds
+): CheckedResolution {
+
+  const existingCheckedCount =
+    allTreatments.filter(treatment => checked.has(treatment.id)).length
+
+  const statisticsTreatments = applyStatisticsFilters(
+    caseTypeAllowed,
+    { ...ALL_TREATMENTS_FILTER, treatmentIds: checkedIdsForFilter(checked) }
+  )
+
+  return {
+    statisticsTreatments,
+    existingCheckedCount,
+    hiddenByCaseTypeCount: Math.max(
+      0,
+      existingCheckedCount - statisticsTreatments.length
+    ),
+  }
+
+}
+
+/* "1 checked treatment" / "3 checked treatments" - for the "Comparing:" line. */
+export function describeCheckedCount(count: number): string {
+  return `${count} checked treatment${count === 1 ? '' : 's'}`
+}
+
+/* The notice shown when the case-type buttons hide some checked treatments. */
+export function describeHiddenByCaseType(count: number): string | null {
+
+  if (count <= 0) {
+    return null
+  }
+
+  return count === 1
+    ? '1 checked treatment is hidden by the case-type filter'
+    : `${count} checked treatments are hidden by the case-type filter`
+
+}
+
+/* "4 of 12 selected", plus the total when more is checked than is in view. */
+export function formatSelectionSummary(summary: SelectionSummary): string {
+
+  const base = `${summary.visibleCheckedCount} of ${summary.visibleCount} selected`
+
+  return summary.checkedCount > summary.visibleCheckedCount
+    ? `${base} (${summary.checkedCount} checked in total)`
+    : base
+
+}
+
+/*
+  Long lists: the table shows a page of rows at a time with a "show
+  more" button, so hundreds of treatments stay responsive on an iPad.
+*/
+
+export const CHECKED_TABLE_PAGE_SIZE = 50
+
+export function pageOfRows<T>(
+  rows: readonly T[],
+  limit: number
+): { shown: T[]; remaining: number } {
+
+  const shown = rows.slice(0, Math.max(0, limit))
+
+  return { shown, remaining: rows.length - shown.length }
+
 }

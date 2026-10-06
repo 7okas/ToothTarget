@@ -2160,6 +2160,142 @@ button:disabled:hover {
   border-color: var(--color-primary-hover);
 }
 
+/*
+  CHECKED TREATMENTS MODE (Statistics, Phase 8)
+
+  Built for an iPad: every control is at least 44px tall, the whole
+  checkbox cell is the tap area, the search box uses 16px text (so
+  Safari does not zoom in on focus), and the table scrolls inside its
+  own box - sideways for the wide columns, up and down for long lists -
+  with the header row pinned so it stays readable.
+*/
+
+.stats-mode-button,
+.checked-action-button {
+  min-height: 44px;
+}
+
+.checked-panel {
+  max-width: 800px;
+  margin: 0 auto var(--space-4) auto;
+}
+
+.checked-search-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 48px;
+  padding: var(--space-2) var(--space-4);
+  font-size: 16px;
+  font-family: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.checked-summary {
+  margin: var(--space-3) 0 var(--space-1) 0;
+  text-align: center;
+  font-weight: var(--weight-medium);
+  color: var(--color-text);
+}
+
+.checked-hidden-notice {
+  margin: var(--space-1) 0;
+  padding: var(--space-2) var(--space-3);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--color-warning-strong);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+}
+
+.checked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.checked-table-scroll {
+  max-height: 60vh;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.checked-table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.checked-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-3);
+  text-align: left;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.checked-table td {
+  padding: var(--space-2) var(--space-3);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--color-surface-sunken);
+}
+
+.checked-table .checked-check-cell {
+  width: 56px;
+  padding: 0;
+}
+
+.checked-check-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 56px;
+  min-height: 48px;
+  cursor: pointer;
+}
+
+.checked-check-label input {
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.checked-row-selected td {
+  background: var(--color-info-bg);
+}
+
+.checked-skipped-flag {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-warning-strong);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-pill);
+}
+
 .stats-section {
   background: var(--color-surface);
   border-radius: var(--radius-lg);

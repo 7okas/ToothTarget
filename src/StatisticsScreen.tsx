@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { Patient, Procedure, ProcedureTemplate, SavedTreatment } from './App'
 import BackButton from './BackButton'
 import TimeTrendChart from './TimeTrendChart'
+import CheckedTreatmentsPanel from './CheckedTreatmentsPanel'
 import ToothChart from './ToothChart'
 import { formatTime, formatSignedTime, formatDate } from './format'
 import { getToothLabel, getToothById, TOOTH_GROUPS, type ToothGroup } from './teeth'
@@ -11,6 +12,8 @@ import {
   filterTreatmentsByCaseType,
   resolveToothSelection,
   resolveDateRangePreset,
+  resolveCustomDateRange,
+  MIN_SAMPLE_SIZE,
   DATE_RANGE_PRESETS,
   calculateTreatmentStatistics,
   calculatePhaseStatistics,
@@ -26,8 +29,20 @@ import {
   type ProcedureFilterOption,
   type CaseTypeFilter,
 } from './statistics'
+import {
+  clearCheckedTreatments,
+  getCheckedTreatmentIds,
+  pruneCheckedTreatments,
+  setCheckedTreatmentIds,
+  subscribeCheckedTreatments,
+} from './checkedTreatmentsStore'
+import {
+  describeCheckedCount,
+  pruneToExisting,
+  resolveCheckedTreatments,
+} from './treatmentSelection'
 
-const MIN_SAMPLE_SIZE = 3
+type StatisticsMode = 'presets' | 'checked'
 
 const CASE_TYPE_FILTER_OPTIONS: { id: CaseTypeFilter; label: string }[] = [
   { id: 'clinical', label: 'Clinical' },
@@ -218,6 +233,33 @@ function StatisticsScreen({
   const [compareCustomDateTo, setCompareCustomDateTo] =
     useState('')
 
+  /*
+    CHECKED-TREATMENTS MODE (Phase 8)
+
+    The two modes share this one screen. The preset filter state above
+    is simply not shown in checked mode (never reset), so switching
+    back restores exactly what was selected. The checked ids live in an
+    in-memory store (checkedTreatmentsStore.ts), not in this component,
+    so they survive leaving and re-entering the screen; they are never
+    written to storage. Ids of deleted treatments are dropped there.
+  */
+
+  const [statsMode, setStatsMode] =
+    useState<StatisticsMode>('presets')
+
+  const storedCheckedIds =
+    useSyncExternalStore(
+      subscribeCheckedTreatments,
+      getCheckedTreatmentIds
+    )
+
+  const checkedIds =
+    pruneToExisting(storedCheckedIds, treatments)
+
+  useEffect(() => {
+    pruneCheckedTreatments(treatments)
+  }, [treatments])
+
   if (treatments.length === 0) {
 
     return (
@@ -256,9 +298,7 @@ function StatisticsScreen({
   const resolvedDateRange =
     resolveDateRangePreset(
       selectedDatePresetId,
-      customDateFrom && customDateTo
-        ? { from: customDateFrom, to: `${customDateTo}T23:59:59.999Z` }
-        : null
+      resolveCustomDateRange(customDateFrom, customDateTo)
     )
 
   const filters: StatisticsFilters =
@@ -280,8 +320,26 @@ function StatisticsScreen({
           dateRange: resolvedDateRange,
         }
 
+  const inCheckedMode = statsMode === 'checked'
+
+  const checkedResolution =
+    resolveCheckedTreatments(
+      treatments,
+      caseTypeFilteredTreatments,
+      checkedIds
+    )
+
+  /*
+    The one place the two modes meet: in checked mode the list is the
+    checked treatments that the case-type buttons also allow; in presets
+    mode it is today's filtered list, unchanged. Everything below reads
+    filteredTreatments, so both modes feed the same calculations.
+  */
+
   const filteredTreatments =
-    applyStatisticsFilters(caseTypeFilteredTreatments, filters)
+    inCheckedMode
+      ? checkedResolution.statisticsTreatments
+      : applyStatisticsFilters(caseTypeFilteredTreatments, filters)
 
   const procedureOptions =
     calculateProcedureFilterOptions(caseTypeFilteredTreatments)
@@ -359,7 +417,7 @@ function StatisticsScreen({
       preset => preset.id === selectedDatePresetId
     )?.label ?? 'All Time'
 
-  const currentSelectionDescription =
+  const presetSelectionDescription =
     describeSelection(
       selectedProcedureIds,
       selectedToothGroups,
@@ -371,6 +429,11 @@ function StatisticsScreen({
     (selectedDatePresetId === 'allTime'
       ? ''
       : ` — ${selectedDatePresetLabel}`)
+
+  const currentSelectionDescription =
+    inCheckedMode
+      ? describeCheckedCount(checkedResolution.statisticsTreatments.length)
+      : presetSelectionDescription
 
   /*
     COMPARISON VIEW: Group A is just the main filter's own results
@@ -387,9 +450,7 @@ function StatisticsScreen({
   const compareResolvedDateRange =
     resolveDateRangePreset(
       compareDatePresetId,
-      compareCustomDateFrom && compareCustomDateTo
-        ? { from: compareCustomDateFrom, to: `${compareCustomDateTo}T23:59:59.999Z` }
-        : null
+      resolveCustomDateRange(compareCustomDateFrom, compareCustomDateTo)
     )
 
   const compareFilters: StatisticsFilters =
@@ -456,6 +517,43 @@ function StatisticsScreen({
 
         <div className="stats-filter-group">
 
+          <p className="stats-filter-group-label">Mode</p>
+
+          <div
+            className="stats-filter-bar"
+            role="group"
+            aria-label="Statistics mode"
+          >
+
+            <button
+              type="button"
+              className={`stats-filter-button stats-mode-button ${
+                !inCheckedMode ? 'stats-filter-active' : ''
+              }`}
+              aria-pressed={!inCheckedMode}
+              onClick={() => setStatsMode('presets')}
+            >
+              Presets
+            </button>
+
+            <button
+              type="button"
+              className={`stats-filter-button stats-mode-button ${
+                inCheckedMode ? 'stats-filter-active' : ''
+              }`}
+              aria-pressed={inCheckedMode}
+              onClick={() => setStatsMode('checked')}
+            >
+              Checked treatments
+            </button>
+
+          </div>
+
+        </div>
+
+
+        <div className="stats-filter-group">
+
           <p className="stats-filter-group-label">Case Type</p>
 
           <div className="stats-filter-bar">
@@ -481,6 +579,9 @@ function StatisticsScreen({
 
         </div>
 
+
+        {!inCheckedMode && (
+        <>
 
         <div className="stats-filter-group">
 
@@ -709,6 +810,22 @@ function StatisticsScreen({
         </div>
 
 
+        </>
+        )}
+
+
+        {inCheckedMode && (
+          <CheckedTreatmentsPanel
+            treatments={caseTypeFilteredTreatments}
+            patients={patients}
+            checked={checkedIds}
+            hiddenByCaseTypeCount={checkedResolution.hiddenByCaseTypeCount}
+            onCheckedChange={setCheckedTreatmentIds}
+            onClear={clearCheckedTreatments}
+          />
+        )}
+
+
         <p className="comparison-description">
           Comparing: <strong>{currentSelectionDescription}</strong>
         </p>
@@ -716,6 +833,7 @@ function StatisticsScreen({
 
         {/* OPTIONAL COMPARISON VIEW */}
 
+        {!inCheckedMode && (
         <div className="stats-compare-toggle">
 
           <button
@@ -727,8 +845,9 @@ function StatisticsScreen({
           </button>
 
         </div>
+        )}
 
-        {showComparison && (
+        {!inCheckedMode && showComparison && (
 
           <div className="stats-compare-section">
 
@@ -926,7 +1045,11 @@ function StatisticsScreen({
         {filteredTreatments.length === 0 && (
 
           <p className="empty-message">
-            No completed treatments match this filter yet.
+            {inCheckedMode
+              ? checkedResolution.existingCheckedCount === 0
+                ? 'Check treatments above to see statistics'
+                : 'None of the checked treatments match the case-type buttons above - change the case type to see their statistics.'
+              : 'No completed treatments match this filter yet.'}
           </p>
 
         )}
