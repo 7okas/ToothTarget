@@ -930,39 +930,34 @@ button:disabled:hover {
 
 .home-nav-grid {
   /*
-    Single row of 4 (was a 2x2 grid) - at this container's own
-    max-width (600px, matching the search bar directly below it) each
-    column is a comfortable ~140px even at the tightest realistic iPad
-    width (744px portrait, iPad mini), since --space-8's page padding
-    plus this cap already keep the grid well under the viewport width
-    on every iPad size/orientation. Falls back to the original 2x2
-    layout below 520px - see the RESPONSIVE section's existing phone
-    breakpoint - for any viewport narrow enough that 4 columns would
-    genuinely be too cramped to tap comfortably.
+    Always a 2x2 grid, at every width (iPad portrait and landscape,
+    phone): four large tiles instead of a thin row of four. The cap
+    keeps the tiles a comfortable size on a wide screen. Each tile is at
+    least 96px tall (the tap target is far above 44px), with a 32px icon
+    over a 16px label that may wrap to two lines, so the full label text
+    ("Manage Procedure Templates") is always shown.
   */
-  max-width: 600px;
+  max-width: 520px;
   margin: 0 auto var(--space-6) auto;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-2);
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3);
 }
 
 .home-nav-grid button {
   /*
-    Phase 8 sized this to fit its own icon+label content (min-height:
-    0 overrides the base <button> rule's control-height floor) rather
-    than a fixed card height. Padding/icon/label size were shrunk
-    again here for the single-row 4-column layout above.
+    min-height 96px overrides the base <button> rule's smaller floor.
+    The label wraps (white-space: normal) rather than being cut off.
   */
   flex-direction: column;
-  min-height: 0;
+  min-height: 96px;
   background: var(--color-surface-alt);
   color: var(--color-ink);
   border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-1);
-  gap: var(--space-1);
-  font-size: 11px;
-  line-height: 1.2;
+  padding: var(--space-4) var(--space-3);
+  gap: var(--space-2);
+  font-size: 16px;
+  line-height: 1.25;
   font-weight: var(--weight-medium);
   white-space: normal;
   text-align: center;
@@ -973,7 +968,7 @@ button:disabled:hover {
 }
 
 .home-nav-icon {
-  font-size: 20px;
+  font-size: 32px;
   line-height: 1;
 }
 
@@ -3090,27 +3085,6 @@ button:disabled:hover {
 
   .quick-chip-row {
     gap: var(--space-1);
-  }
-
-  /*
-    The 4-column single-row home nav (see .home-nav-grid's own
-    comment) is sized for iPad; below this width, fall back to the
-    original 2x2 grid + larger icon/label/padding rather than
-    shrinking 4 columns further into an uncomfortably small tap
-    target.
-  */
-  .home-nav-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--space-4);
-  }
-
-  .home-nav-grid button {
-    padding: var(--space-4) var(--space-3);
-    font-size: var(--text-xs);
-  }
-
-  .home-nav-icon {
-    font-size: 22px;
   }
 
   /*
