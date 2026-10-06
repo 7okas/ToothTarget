@@ -332,13 +332,13 @@ describe('requestCloudSyncIfSignedIn - automatic triggers (Phase 2)', () => {
     await flushMicrotasks(10)
 
     expect(mockedSyncCloudNow).not.toHaveBeenCalled()
-    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getCloudSyncStatus()).toBe('synced')
 
   })
 
   it('a fresh sign-in (isSignedIn: true) behaves exactly like requestCloudSync()', async () => {
 
-    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getCloudSyncStatus()).toBe('synced')
 
     requestCloudSyncIfSignedIn(true)
 
@@ -346,7 +346,7 @@ describe('requestCloudSyncIfSignedIn - automatic triggers (Phase 2)', () => {
 
     await flushMicrotasks()
 
-    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getCloudSyncStatus()).toBe('synced')
     expect(mockedSyncCloudNow).toHaveBeenCalledTimes(1)
 
   })
@@ -374,7 +374,7 @@ describe('requestCloudPullIfSignedIn - app open / fresh sign-in / gate retry (Ph
 
     expect(mockedPullCloudSnapshot).not.toHaveBeenCalled()
     expect(mockedSyncCloudNow).not.toHaveBeenCalled()
-    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getCloudSyncStatus()).toBe('synced')
 
   })
 
@@ -408,7 +408,7 @@ describe('cloud sync status', () => {
 
   it('reports idle, pending, syncing, then idle again for a successful sync', async () => {
 
-    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getCloudSyncStatus()).toBe('synced')
 
     let resolveSync: (value: Awaited<ReturnType<typeof syncCloudNow>>) => void =
       () => {}
@@ -432,11 +432,38 @@ describe('cloud sync status', () => {
 
     await flushMicrotasks()
 
-    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getCloudSyncStatus()).toBe('synced')
 
   })
 
-  it('reports unavailable after a failed sync, and notifies subscribers', async () => {
+  it('starts as synced before any attempt has run (no outcome yet)', () => {
+
+    expect(getCloudSyncStatus()).toBe('synced')
+    expect(getLastSyncOutcome()).toBeNull()
+
+  })
+
+  it.each([
+    ['auth-failed', { status: 'auth-failed' } as const, 'needs-input'],
+    ['permission-denied', { status: 'permission-denied', detail: 'x' } as const, 'needs-input'],
+    ['validation-failed', { status: 'validation-failed', detail: 'x' } as const, 'needs-input'],
+    ['network-unreachable', { status: 'network-unreachable', detail: 'x' } as const, 'offline'],
+    ['graph-error', { status: 'graph-error', detail: 'x' } as const, 'offline'],
+    ['cloud-committed-locally-pending', { status: 'cloud-committed-locally-pending', detail: 'x' } as const, 'offline'],
+    ['diverged', { status: 'diverged', detail: 'x' } as const, 'conflict'],
+    ['synced', { status: 'synced' } as const, 'synced'],
+  ])('a %s result sets the status to %s', async (_name, result, expected) => {
+
+    mockedSyncCloudNow.mockResolvedValueOnce(result)
+
+    requestCloudSync()
+    await flushMicrotasks()
+
+    expect(getCloudSyncStatus()).toBe(expected)
+
+  })
+
+  it('notifies subscribers when a failed sync changes the status', async () => {
 
     mockedSyncCloudNow.mockResolvedValueOnce({ status: 'auth-failed' })
 
@@ -446,7 +473,7 @@ describe('cloud sync status', () => {
     requestCloudSync()
     await flushMicrotasks()
 
-    expect(getCloudSyncStatus()).toBe('unavailable')
+    expect(getCloudSyncStatus()).toBe('needs-input')
     expect(listener).toHaveBeenCalled()
 
     unsubscribe()
@@ -697,7 +724,7 @@ describe('Phase 6 resolution hooks (not called by anything yet)', () => {
     reportResolutionApplied()
 
     expect(getLastSyncOutcome()).toEqual({ type: 'synced' })
-    expect(getCloudSyncStatus()).toBe('idle')
+    expect(getCloudSyncStatus()).toBe('synced')
     expect(getLocalDataVersion()).toBe(1)
     expect(mockedMaybeRotateBackup).toHaveBeenCalledTimes(1)
     expect(mockedSyncCloudNow).not.toHaveBeenCalled()

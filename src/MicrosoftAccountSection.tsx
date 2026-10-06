@@ -36,10 +36,12 @@ const CLOUD_SYNC_STATUS_LABEL: Record<
   ReturnType<typeof getCloudSyncStatus>,
   string
 > = {
-  idle: 'Synced',
+  synced: 'Synced',
   pending: 'Sync pending…',
   syncing: 'Syncing…',
-  unavailable: 'Cloud sync unavailable',
+  offline: 'Offline, will retry',
+  conflict: 'Sync conflict',
+  'needs-input': 'Needs your input',
 }
 
 /*

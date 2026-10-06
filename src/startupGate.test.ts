@@ -6,6 +6,10 @@ import {
   INITIAL_STARTUP_GATE_STATE,
   type StartupGateState,
 } from './startupGate'
+import type { SyncOutcomeReason } from './syncOutcome'
+
+const SYNCED_OUTCOME: SyncOutcomeReason = { type: 'synced' }
+const OFFLINE_OUTCOME: SyncOutcomeReason = { type: 'offline' }
 
 /*
   Pure-logic-only, same constraint as StartupSyncOverlay.test.ts /
@@ -26,7 +30,7 @@ describe('reduceStartupGateState - tracks only the currently-gating sync attempt
   it('moves to syncing once a gating attempt becomes pending', () => {
 
     expect(
-      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'pending')
+      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'pending', null)
     ).toEqual({ passed: false, phase: 'syncing' })
 
   })
@@ -34,28 +38,47 @@ describe('reduceStartupGateState - tracks only the currently-gating sync attempt
   it('moves to syncing once a gating attempt becomes syncing directly', () => {
 
     expect(
-      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'syncing')
+      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'syncing', null)
     ).toEqual({ passed: false, phase: 'syncing' })
 
   })
 
-  it('stays idle while status is idle/unavailable before any attempt has started', () => {
+  it('stays idle while status is synced/offline before any attempt has started', () => {
 
     expect(
-      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'idle')
+      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'synced', SYNCED_OUTCOME)
     ).toEqual(INITIAL_STARTUP_GATE_STATE)
 
     expect(
-      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'unavailable')
+      reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'offline', OFFLINE_OUTCOME)
     ).toEqual(INITIAL_STARTUP_GATE_STATE)
 
   })
 
-  it('resolves a syncing attempt to success when status reaches idle', () => {
+  it('does NOT count the initial "synced" status as success: no attempt has completed (no outcome yet)', () => {
+
+    // The scheduler's status starts as 'synced' before any attempt runs.
+    // The gate must stay in its waiting state, and the view must say "syncing".
+    const initial = reduceStartupGateState(INITIAL_STARTUP_GATE_STATE, 'synced', null)
+
+    expect(initial).toEqual(INITIAL_STARTUP_GATE_STATE)
+    expect(computeStartupGateView(true, initial, null)).toEqual({ kind: 'syncing' })
+
+  })
+
+  it('stays in syncing when status flips to synced but no outcome exists yet', () => {
 
     const midAttempt: StartupGateState = { passed: false, phase: 'syncing' }
 
-    expect(reduceStartupGateState(midAttempt, 'idle')).toEqual({
+    expect(reduceStartupGateState(midAttempt, 'synced', null)).toBe(midAttempt)
+
+  })
+
+  it('resolves a syncing attempt to success when status reaches synced with an outcome', () => {
+
+    const midAttempt: StartupGateState = { passed: false, phase: 'syncing' }
+
+    expect(reduceStartupGateState(midAttempt, 'synced', SYNCED_OUTCOME)).toEqual({
       passed: false,
       phase: 'success',
     })
@@ -66,7 +89,7 @@ describe('reduceStartupGateState - tracks only the currently-gating sync attempt
 
     const midAttempt: StartupGateState = { passed: false, phase: 'syncing' }
 
-    expect(reduceStartupGateState(midAttempt, 'unavailable')).toEqual({
+    expect(reduceStartupGateState(midAttempt, 'offline', OFFLINE_OUTCOME)).toEqual({
       passed: false,
       phase: 'error',
     })
@@ -77,7 +100,7 @@ describe('reduceStartupGateState - tracks only the currently-gating sync attempt
 
     const afterError: StartupGateState = { passed: false, phase: 'error' }
 
-    expect(reduceStartupGateState(afterError, 'pending')).toEqual({
+    expect(reduceStartupGateState(afterError, 'pending', null)).toEqual({
       passed: false,
       phase: 'syncing',
     })
@@ -88,9 +111,9 @@ describe('reduceStartupGateState - tracks only the currently-gating sync attempt
 
     const passedMidSuccess: StartupGateState = { passed: true, phase: 'success' }
 
-    expect(reduceStartupGateState(passedMidSuccess, 'pending')).toBe(passedMidSuccess)
-    expect(reduceStartupGateState(passedMidSuccess, 'unavailable')).toBe(passedMidSuccess)
-    expect(reduceStartupGateState(passedMidSuccess, 'idle')).toBe(passedMidSuccess)
+    expect(reduceStartupGateState(passedMidSuccess, 'pending', null)).toBe(passedMidSuccess)
+    expect(reduceStartupGateState(passedMidSuccess, 'offline', OFFLINE_OUTCOME)).toBe(passedMidSuccess)
+    expect(reduceStartupGateState(passedMidSuccess, 'synced', SYNCED_OUTCOME)).toBe(passedMidSuccess)
 
   })
 

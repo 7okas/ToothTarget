@@ -6,7 +6,7 @@ import { requestCloudSyncIfSignedIn } from './cloudSyncScheduler'
 
   A network drop during a sync already surfaces as a normal, typed
   failure (see cloudStorage.ts's describeNetworkFailure() /
-  cloudSyncScheduler.ts's 'unavailable' status) - nothing was ever at
+  cloudSyncScheduler.ts's 'offline' status) - nothing was ever at
   risk of being lost (the mutation that triggered the sync had already
   been committed to localStorage before requestCloudSync() was ever
   called, per cloudSyncScheduler.ts's own header comment). What was

@@ -35,9 +35,9 @@ import type { CloudSyncStatus } from './cloudSyncScheduler'
       (there's nothing to report).
     - once at least one attempt has completed, and the most recent
       outcome needs attention (regardless of whether the coarse status
-      is 'idle' or 'unavailable' - eg. a successful sync that still
+      is 'synced' or any non-success state - eg. a successful sync that still
       left an unresolved patient-number conflict) -> 'attention'.
-    - otherwise, 'idle' -> 'success', 'unavailable' -> 'failure'.
+    - otherwise, 'synced' -> 'success', any other state -> 'failure'.
   This alone satisfies "success/attention/failure icon persists
   indefinitely, and only flips on an actual subsequent status
   transition" - between one outcome and the next, any retries only ever
@@ -47,7 +47,7 @@ import type { CloudSyncStatus } from './cloudSyncScheduler'
 
   text is keyed off the TRANSITION (previousStatus was 'pending'/
   'syncing', current status just resolved), same reasoning as before
-  this phase: 'idle' or 'unavailable' reached any other way (the
+  this phase: a result state reached any other way (the
   long-settled case, or a failure just sitting there from before) must
   not re-show text that was already shown and has since been
   dismissed/faded. autoHide is now driven by needsAttention rather than
@@ -105,7 +105,7 @@ export function reduceSyncIndicatorState(
       ? null
       : copy?.needsAttention
         ? 'attention'
-        : currentStatus === 'idle'
+        : currentStatus === 'synced'
           ? 'success'
           : 'failure'
 
@@ -142,7 +142,7 @@ export function canReviewDifferencesFromBadge(
   Pure, same reasoning as reduceSyncIndicatorState() above. The
   clickable badge only ever renders while the icon shows 'success'
   (see SyncStatusIndicator.tsx's own render), which itself already
-  implies currentStatus === 'idle' - but this re-checks the live
+  implies currentStatus === 'synced' - but this re-checks the live
   status directly rather than trusting that derived icon state, so a
   tap can never queue a duplicate/conflicting sync on top of one
   already running or about to run. Also used by

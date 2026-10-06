@@ -76,7 +76,8 @@ export const INITIAL_STARTUP_GATE_STATE: StartupGateState = {
 
 export function reduceStartupGateState(
   previous: StartupGateState,
-  currentStatus: CloudSyncStatus
+  currentStatus: CloudSyncStatus,
+  outcome: SyncOutcomeReason | null
 ): StartupGateState {
 
   if (previous.passed) {
@@ -92,10 +93,18 @@ export function reduceStartupGateState(
   }
 
   if (previous.phase === 'syncing') {
-    return {
-      ...previous,
-      phase: currentStatus === 'idle' ? 'success' : 'error',
+
+    if (currentStatus === 'synced') {
+      /*
+        'synced' is also the value before any attempt has run, so it only
+        counts as success once an attempt has actually completed (an
+        outcome exists). Without one, keep waiting.
+      */
+      return outcome === null ? previous : { ...previous, phase: 'success' }
     }
+
+    return { ...previous, phase: 'error' }
+
   }
 
   return previous

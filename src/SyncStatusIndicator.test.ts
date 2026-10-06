@@ -38,6 +38,7 @@ import {
 import {
   describeSyncOutcome,
   type SyncOutcomeReason,
+  SYNC_STATE_OF_OUTCOME,
   type SyncOutcomeType,
 } from './syncOutcome'
 
@@ -50,7 +51,7 @@ describe('reduceSyncIndicatorState - while syncing', () => {
   it('shows the spinner icon + "Syncing…" text while pending, from the initial state', () => {
 
     expect(
-      reduceSyncIndicatorState(INITIAL_SYNC_INDICATOR_STATE, 'idle', 'pending', null)
+      reduceSyncIndicatorState(INITIAL_SYNC_INDICATOR_STATE, 'synced', 'pending', null)
     ).toEqual({
       hasCompletedOnce: false,
       icon: 'spinner',
@@ -76,7 +77,7 @@ describe('reduceSyncIndicatorState - while syncing', () => {
     expect(
       reduceSyncIndicatorState(
         INITIAL_SYNC_INDICATOR_STATE,
-        'idle',
+        'synced',
         'pending',
         OFFLINE
       )
@@ -95,7 +96,7 @@ describe('reduceSyncIndicatorState - before any sync has ever completed this ses
   it('shows nothing for a settled idle status reached with no prior pending/syncing', () => {
 
     expect(
-      reduceSyncIndicatorState(INITIAL_SYNC_INDICATOR_STATE, 'idle', 'idle', null)
+      reduceSyncIndicatorState(INITIAL_SYNC_INDICATOR_STATE, 'synced', 'synced', null)
     ).toEqual({
       hasCompletedOnce: false,
       icon: null,
@@ -107,7 +108,7 @@ describe('reduceSyncIndicatorState - before any sync has ever completed this ses
   it('shows nothing for a settled unavailable status reached with no prior pending/syncing', () => {
 
     expect(
-      reduceSyncIndicatorState(INITIAL_SYNC_INDICATOR_STATE, 'idle', 'unavailable', null)
+      reduceSyncIndicatorState(INITIAL_SYNC_INDICATOR_STATE, 'synced', 'offline', null)
     ).toEqual({
       hasCompletedOnce: false,
       icon: null,
@@ -125,7 +126,7 @@ describe('reduceSyncIndicatorState - a sync attempt just completed (fresh transi
     const result = reduceSyncIndicatorState(
       INITIAL_SYNC_INDICATOR_STATE,
       'syncing',
-      'idle',
+      'synced',
       SYNCED
     )
 
@@ -144,7 +145,7 @@ describe('reduceSyncIndicatorState - a sync attempt just completed (fresh transi
     const result = reduceSyncIndicatorState(
       INITIAL_SYNC_INDICATOR_STATE,
       'syncing',
-      'unavailable',
+      'offline',
       null
     )
 
@@ -159,7 +160,7 @@ describe('reduceSyncIndicatorState - a sync attempt just completed (fresh transi
     const result = reduceSyncIndicatorState(
       INITIAL_SYNC_INDICATOR_STATE,
       'syncing',
-      'unavailable',
+      'needs-input',
       NOT_SIGNED_IN
     )
 
@@ -176,7 +177,7 @@ describe('reduceSyncIndicatorState - a sync attempt just completed (fresh transi
     const result = reduceSyncIndicatorState(
       INITIAL_SYNC_INDICATOR_STATE,
       'syncing',
-      'unavailable',
+      'offline',
       OFFLINE
     )
 
@@ -219,12 +220,18 @@ describe('reduceSyncIndicatorState - every classified outcome maps to a distinct
       const result = reduceSyncIndicatorState(
         INITIAL_SYNC_INDICATOR_STATE,
         'syncing',
-        'unavailable',
+        SYNC_STATE_OF_OUTCOME[type],
         outcome
       )
 
       expect(result.text?.autoHide).toBe(!copy.needsAttention)
-      expect(result.icon).toBe(copy.needsAttention ? 'attention' : 'failure')
+      expect(result.icon).toBe(
+        copy.needsAttention
+          ? 'attention'
+          : SYNC_STATE_OF_OUTCOME[type] === 'synced'
+            ? 'success'
+            : 'failure'
+      )
       expect(result.text?.label).toBe(copy.label)
 
     }
@@ -259,7 +266,7 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
     // unrelated idle->idle re-render.
     const settled: SyncIndicatorState = { ...afterASuccess, text: null }
 
-    expect(reduceSyncIndicatorState(settled, 'idle', 'idle', SYNCED)).toEqual({
+    expect(reduceSyncIndicatorState(settled, 'synced', 'synced', SYNCED)).toEqual({
       hasCompletedOnce: true,
       icon: 'success',
       text: null,
@@ -270,7 +277,7 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
   it('keeps showing the red X, with no re-shown text, for a failure just sitting there', () => {
 
     expect(
-      reduceSyncIndicatorState(afterAFailure, 'unavailable', 'unavailable', OFFLINE)
+      reduceSyncIndicatorState(afterAFailure, 'offline', 'offline', OFFLINE)
     ).toEqual({
       hasCompletedOnce: true,
       icon: 'failure',
@@ -284,8 +291,8 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
     expect(
       reduceSyncIndicatorState(
         afterAttentionNeeded,
-        'unavailable',
-        'unavailable',
+        'offline',
+        'needs-input',
         NOT_SIGNED_IN
       )
     ).toEqual({
@@ -299,7 +306,7 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
   it('a retry after a failure shows the spinner (temporarily) rather than the red X', () => {
 
     expect(
-      reduceSyncIndicatorState(afterAFailure, 'unavailable', 'pending', OFFLINE)
+      reduceSyncIndicatorState(afterAFailure, 'offline', 'pending', OFFLINE)
     ).toEqual({
       hasCompletedOnce: true,
       icon: 'spinner',
@@ -317,7 +324,7 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
     }
 
     expect(
-      reduceSyncIndicatorState(midRetry, 'syncing', 'idle', SYNCED)
+      reduceSyncIndicatorState(midRetry, 'syncing', 'synced', SYNCED)
     ).toEqual({
       hasCompletedOnce: true,
       icon: 'success',
@@ -335,7 +342,7 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
     }
 
     expect(
-      reduceSyncIndicatorState(midRetry, 'syncing', 'unavailable', OFFLINE)
+      reduceSyncIndicatorState(midRetry, 'syncing', 'offline', OFFLINE)
     ).toEqual({
       hasCompletedOnce: true,
       icon: 'failure',
@@ -347,7 +354,7 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
   it('a fresh success after a failure clears the error text and shows a fading "Synced" instead', () => {
 
     expect(
-      reduceSyncIndicatorState(afterAFailure, 'syncing', 'idle', SYNCED)
+      reduceSyncIndicatorState(afterAFailure, 'syncing', 'synced', SYNCED)
     ).toEqual({
       hasCompletedOnce: true,
       icon: 'success',
@@ -359,7 +366,7 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
   it('an attention item resolving into a clean success switches the icon from amber to green', () => {
 
     expect(
-      reduceSyncIndicatorState(afterAttentionNeeded, 'syncing', 'idle', SYNCED)
+      reduceSyncIndicatorState(afterAttentionNeeded, 'syncing', 'synced', SYNCED)
     ).toEqual({
       hasCompletedOnce: true,
       icon: 'success',
@@ -373,11 +380,11 @@ describe('reduceSyncIndicatorState - the icon persists indefinitely once a sync 
 describe('canTriggerManualSync - the "click the checkmark to sync now" guard (Phase 8)', () => {
 
   it('allows triggering when idle (the only status the success icon actually shows for)', () => {
-    expect(canTriggerManualSync('idle')).toBe(true)
+    expect(canTriggerManualSync('synced')).toBe(true)
   })
 
   it('allows triggering when unavailable (a click from the failure/attention icon path is still safe, even though the UI never wires one up)', () => {
-    expect(canTriggerManualSync('unavailable')).toBe(true)
+    expect(canTriggerManualSync('offline')).toBe(true)
   })
 
   it('refuses to trigger while a sync is pending (about to start)', () => {
@@ -429,8 +436,8 @@ describe('canReviewDifferencesFromBadge (Phase 6) - when the badge opens the res
 
     const afterResolve = reduceSyncIndicatorState(
       { icon: 'attention', text: null, hasCompletedOnce: true },
-      'idle',
-      'idle',
+      'synced',
+      'synced',
       { type: 'synced' }
     )
 

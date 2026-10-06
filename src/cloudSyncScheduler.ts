@@ -4,7 +4,12 @@ import {
   markLocalDataDirty,
   type CloudSyncResult,
 } from './cloudSyncEngine'
-import { classifySyncOutcome, type SyncOutcomeReason } from './syncOutcome'
+import {
+  classifySyncOutcome,
+  SYNC_STATE_OF_OUTCOME,
+  type SyncOutcomeReason,
+  type SyncState,
+} from './syncOutcome'
 import { maybeRotateBackup } from './cloudBackupRotation'
 
 /*
@@ -115,9 +120,15 @@ let pendingOperation: 'none' | 'push' | 'pull' = 'none'
   can read it the same way via useSyncExternalStore.
 */
 
-export type CloudSyncStatus = 'idle' | 'syncing' | 'pending' | 'unavailable'
+/*
+  Phase 7 - the four result states (see syncOutcome.ts's SyncState) plus
+  the two in-progress ones. 'synced' is also the value before any sync
+  attempt has run; nothing may treat it as proof that an attempt
+  completed (lastSyncOutcome is null until one has).
+*/
+export type CloudSyncStatus = SyncState | 'syncing' | 'pending'
 
-let status: CloudSyncStatus = 'idle'
+let status: CloudSyncStatus = 'synced'
 
 const statusListeners = new Set<() => void>()
 
@@ -285,7 +296,7 @@ export function notifyLocalDataReplaced(): void {
 export function reportResolutionApplied(): void {
 
   setLastSyncOutcome({ type: 'synced' })
-  setStatus('idle')
+  setStatus('synced')
   bumpLocalDataVersion()
 
   maybeRotateBackup().catch(() => {})
@@ -342,7 +353,9 @@ function startIfIdle(): void {
           uniformly, not just the ones that reached a normal
           success/failure.
         */
-        setLastSyncOutcome(classifySyncOutcome(result))
+        const outcome = classifySyncOutcome(result)
+
+        setLastSyncOutcome(outcome)
 
         const succeeded = isSuccessStatus(result)
 
@@ -370,7 +383,7 @@ function startIfIdle(): void {
           maybeRotateBackup().catch(() => {})
         }
 
-        return succeeded
+        return { succeeded, state: SYNC_STATE_OF_OUTCOME[outcome.type] }
 
       },
       () => {
@@ -378,10 +391,10 @@ function startIfIdle(): void {
           Defensive only - see this file's header comment. syncCloudNow()
           itself always resolves with a typed result, never throws.
         */
-        return false
+        return { succeeded: false, state: 'offline' as SyncState }
       }
     )
-    .then(succeeded => {
+    .then(({ state }) => {
 
       running = false
 
@@ -389,13 +402,13 @@ function startIfIdle(): void {
         /*
           Another meaningful mutation (or a pull trigger) arrived while
           this attempt was running - reflect that immediately rather
-          than briefly showing 'idle'/'unavailable' before the next run
+          than briefly showing the finished state before the next run
           starts.
         */
         setStatus('pending')
         scheduleFlush()
       } else {
-        setStatus(succeeded ? 'idle' : 'unavailable')
+        setStatus(state)
       }
 
     })
@@ -505,7 +518,7 @@ export function __resetCloudSyncSchedulerForTests(): void {
   running = false
   pendingOperation = 'none'
   microtaskQueued = false
-  status = 'idle'
+  status = 'synced'
   lastSyncOutcome = null
   localDataVersion = 0
 }

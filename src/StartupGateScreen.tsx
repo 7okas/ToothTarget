@@ -103,7 +103,7 @@ export default function StartupGateScreen() {
 
   if (status !== reducedStatus) {
     setReducedStatus(status)
-    setState(current => reduceStartupGateState(current, status))
+    setState(current => reduceStartupGateState(current, status, outcome))
   }
 
   /*
