@@ -83,20 +83,6 @@ describe('classifySyncOutcome - every CloudSyncResult status maps to its own dis
 
   })
 
-  it('stale-review-required: "review-needed", needs attention', () => {
-
-    const result: CloudSyncResult = {
-      status: 'stale-review-required',
-      candidates: [],
-    }
-
-    expect(classifySyncOutcome(result)).toEqual({ type: 'review-needed' })
-    expect(
-      describeSyncOutcome(classifySyncOutcome(result)).needsAttention
-    ).toBe(true)
-
-  })
-
   it('cloud-committed-locally-pending: "save-incomplete", does not need attention (self-heals on next sync)', () => {
 
     const result: CloudSyncResult = {
@@ -354,7 +340,6 @@ describe('SYNC_OUTCOME_COPY - every reason has real, distinct, non-technical wor
         'local-data-invalid',
         'not-signed-in',
         'patient-number-conflicts',
-        'review-needed',
         'sign-in-denied',
       ].sort()
     )

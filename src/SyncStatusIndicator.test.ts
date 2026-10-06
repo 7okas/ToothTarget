@@ -238,7 +238,6 @@ describe('reduceSyncIndicatorState - every classified outcome maps to a distinct
     'synced',
     'synced-after-conflict',
     'patient-number-conflicts',
-    'review-needed',
     'save-incomplete',
     'sync-busy',
     'cloud-data-corrupted',
@@ -444,7 +443,6 @@ describe('canReviewDifferencesFromBadge (Phase 6) - when the badge opens the res
       'not-signed-in',
       'cloud-data-corrupted',
       'patient-number-conflicts',
-      'review-needed',
       'local-data-invalid',
       'sign-in-denied',
     ] as const) {

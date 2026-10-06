@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import './App.css'
 import logo from './assets/logo.png'
 import BackButton from './BackButton'
@@ -45,9 +45,6 @@ import {
 import {
   requestCloudSync,
   requestCloudPullIfSignedIn,
-  getPendingStaleReview,
-  subscribePendingStaleReview,
-  resumeSyncAfterStaleReview,
   subscribeLocalDataVersion,
   notifyLocalDataReplaced,
 } from './cloudSyncScheduler'
@@ -55,7 +52,6 @@ import {
   hasPendingResolutionMarker,
   finishPendingResolution,
 } from './syncResolutionEngine'
-import type { StaleReviewCandidate } from './staleRecordReview'
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
@@ -266,19 +262,6 @@ export type Patient = {
     merge/sync treats it like any other intentional content change.
   */
   caseType?: PatientCaseType
-}
-
-/*
-  RETIRED: deletions no longer leave a tombstone behind. This type only
-  survives for the old merge/stale-review modules that are removed in
-  the next steps of Phase 7.
-*/
-
-export type DeletionTombstone = {
-  id: string
-  entityType: 'patient' | 'procedureTemplate' | 'treatment' | 'procedure'
-  entityId: string
-  deletedAt: string
 }
 
 type ActiveTreatment = {
@@ -3085,7 +3068,6 @@ function App() {
     | 'statistics'
     | 'treatmentSearch'
     | 'settings'
-    | 'staleReview'
   >('home')
 
   const [patientSearch, setPatientSearch] = useState('')
@@ -3166,54 +3148,6 @@ const [conflictKeepChoice, setConflictKeepChoice] = useState<{
 
 const [conflictResolutionError, setConflictResolutionError] =
   useState<string | null>(null)
-
-/*
-  STALE-RECORD REVIEW (Phase 4.7)
-
-  pendingStaleReview itself is owned by cloudSyncScheduler.ts (see that
-  file's own pendingStaleReview store) - read here the same
-  useSyncExternalStore pattern SyncStatusIndicator.tsx/
-  StartupGateScreen.tsx already use for that module's status store, so
-  this component always reflects the current candidate list, including
-  one set from a sync that happened before this component even mounted.
-
-  staleReviewDecidedIds is this tab's own in-session bookkeeping of
-  which candidates the dentist has already decided (kept, or discarded
-  - a discard also removes the patient from savedPatients entirely, so
-  its own absence there would work too, but tracking ids explicitly
-  here keeps "kept" and "discarded" visually indistinguishable from the
-  review screen's own point of view: both simply leave the list).
-  Deliberately NOT persisted anywhere - if the dentist leaves mid-review
-  and the app reloads, the next sync attempt recomputes candidates fresh
-  from current local/cloud state and the review starts over, which is
-  simpler and safer than trying to resurrect a partial decision set
-  across a reload (see cloudSyncEngine.ts's own comment on why "kept"
-  decisions aren't persisted either).
-*/
-
-const pendingStaleReview = useSyncExternalStore(
-  subscribePendingStaleReview,
-  getPendingStaleReview
-)
-
-const [staleReviewDecidedIds, setStaleReviewDecidedIds] =
-  useState<Set<string>>(new Set())
-
-const [staleReviewDiscardTargetId, setStaleReviewDiscardTargetId] =
-  useState<string | null>(null)
-
-const [staleReviewActionError, setStaleReviewActionError] =
-  useState<string | null>(null)
-
-/*
-  True only while the dentist is viewing a patient's full record FROM
-  the review screen (requirement 5) - lets the Patient screen's own
-  BackButton return to the review screen instead of Home, without
-  touching backToHome() itself (used from many other places, all of
-  which should keep going to Home exactly as before).
-*/
-const [staleReviewReturnActive, setStaleReviewReturnActive] =
-  useState(false)
 
 /*
   toothTargetNextPatientNumber itself is deliberately NOT kept in
@@ -4399,38 +4333,6 @@ const [staleReviewReturnActive, setStaleReviewReturnActive] =
     real browser event, never synchronously during mount.
   */
   useEffect(() => attachOnlineRetryListener(), [])
-
-
-  /*
-    NAVIGATE TO THE STALE-RECORD REVIEW SCREEN (Phase 4.7)
-
-    Only ever auto-navigates while `screen === 'home'` - never yanks the
-    dentist away from an active treatment timer, an in-progress patient
-    edit, or anything else mid-workflow. Adjusted directly during
-    render (not inside a useEffect - see
-    https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
-    rather than a useEffect keyed on [pendingStaleReview, screen]: a
-    synchronous setState() call at a useEffect's own top level causes
-    an extra, avoidable render pass (react-hooks/set-state-in-effect),
-    and this check needs no such deferral - it's naturally self-
-    terminating, since setScreen('staleReview') makes `screen ===
-    'home'` false on the very next check, so it can never re-fire for
-    the same pending review. This still reliably surfaces the review
-    the moment it's actually safe to: re-evaluated on every render,
-    it catches landing back on Home later (after finishing whatever
-    the dentist was doing when the review first became pending) just
-    as the old effect's dependency array did. A dentist who never
-    returns to Home still sees the warning banner rendered on that
-    screen (see the 'home' screen below) and can open the review
-    manually at any time in the meantime.
-  */
-  if (
-    pendingStaleReview &&
-    pendingStaleReview.length > 0 &&
-    screen === 'home'
-  ) {
-    setScreen('staleReview')
-  }
 
 
   /*
@@ -6616,21 +6518,13 @@ async function openPatient(
   }
 
   /*
-    SHARED PATIENT-DELETION CORE (Phase 4.7 extraction)
+    SHARED PATIENT-DELETION CORE
 
-    Everything confirmDeletePatient() below used to do inline, minus the
-    three UI-only concerns that differ by caller (closing whichever
-    confirm modal is open, clearing selectedHistoryTreatment, and which
-    screen to land on afterward) - factored out so
-    confirmDiscardStaleReviewPatient() (the review screen's "Discard"
-    action) can reuse the EXACT same cascade-plan/sync logic
-    a normal patient deletion already uses, per this phase's own
-    requirement that discarding "behave like a normal deletion", not a
-    second, parallel implementation of it. Takes an explicit id/name
-    pair rather than reading `selectedPatient` itself, since the review
-    screen's caller already knows exactly which candidate it's acting
-    on and has no dependency on which patient (if any) is currently
-    open on the Patient screen.
+    Everything confirmDeletePatient() below does apart from the UI-only
+    concerns (closing the confirm modal, clearing
+    selectedHistoryTreatment, and which screen to land on afterward).
+    Takes an explicit id/name pair rather than reading `selectedPatient`
+    itself.
   */
 
   async function deletePatientRecordAndCascade(
@@ -6772,127 +6666,6 @@ async function openPatient(
     setSelectedHistoryTreatment(null)
 
     backToHome()
-
-  }
-
-  /*
-    STALE-RECORD REVIEW SCREEN (Phase 4.7)
-
-    See this file's own pendingStaleReview/staleReviewDecidedIds state
-    comments above for the overall design. "View Full Record" reuses
-    the existing Patient screen wholesale (requirement 5 - complete
-    treatment history, not a second, cut-down summary view) rather than
-    building a separate read-only viewer; the only new behavior needed
-    is remembering to come back HERE instead of Home afterward.
-  */
-
-  function viewStaleReviewPatientRecord(candidate: StaleReviewCandidate) {
-
-    setSelectedPatient(candidate.name)
-
-    setPatientSearch(candidate.name)
-
-    setStaleReviewReturnActive(true)
-
-    setScreen('patient')
-
-  }
-
-  function returnFromStaleReviewPatientView() {
-
-    setStaleReviewReturnActive(false)
-
-    setScreen('staleReview')
-
-  }
-
-  /*
-    "Keep" writes nothing at all - the patient simply stays exactly as
-    it already is, a completely normal local patient, and reaches the
-    cloud the ordinary way on the resumed sync finishStaleReview()
-    triggers. Only this tab's own in-session decision bookkeeping is
-    updated, so the review list stops asking about it again.
-  */
-  function keepStaleReviewPatient(patientId: string) {
-
-    setStaleReviewActionError(null)
-
-    setStaleReviewDecidedIds(previous => {
-      const next = new Set(previous)
-      next.add(patientId)
-      return next
-    })
-
-  }
-
-  function requestDiscardStaleReviewPatient(patientId: string) {
-    setStaleReviewActionError(null)
-    setStaleReviewDiscardTargetId(patientId)
-  }
-
-  function cancelDiscardStaleReviewPatient() {
-    setStaleReviewDiscardTargetId(null)
-  }
-
-  /*
-    Reuses deletePatientRecordAndCascade() - the exact same cascade
-    plan and requestCloudSync() a normal patient deletion
-    already uses (requirement 6: discarding must behave like a real
-    deletion, not a silent removal). The active-treatment block can, in
-    principle, still fire here (a candidate patient could have picked up
-    a fresh active treatment on this device since the review began) -
-    surfaced as an inline error on the review screen rather than losing
-    the dentist's "discard" decision silently.
-  */
-  async function confirmDiscardStaleReviewPatient() {
-
-    const candidate =
-      (pendingStaleReview ?? []).find(
-        item => item.patientId === staleReviewDiscardTargetId
-      )
-
-    setStaleReviewDiscardTargetId(null)
-
-    if (!candidate) {
-      return
-    }
-
-    const result =
-      await deletePatientRecordAndCascade(candidate.patientId, candidate.name)
-
-    if (result.blocked) {
-      setStaleReviewActionError(result.reason)
-      return
-    }
-
-    setStaleReviewActionError(null)
-
-    setStaleReviewDecidedIds(previous => {
-      const next = new Set(previous)
-      next.add(candidate.patientId)
-      return next
-    })
-
-  }
-
-  /*
-    Called once every candidate has been kept or discarded. Resets this
-    tab's own decision bookkeeping (nothing left to remember - the next
-    stale episode, if one ever happens again, starts from a clean
-    slate) and hands off to resumeSyncAfterStaleReview()
-    (cloudSyncScheduler.ts), which clears the pending review and
-    requests exactly one more sync attempt that skips the gate this
-    review just satisfied.
-  */
-  function finishStaleReview() {
-
-    setStaleReviewDecidedIds(new Set())
-
-    setStaleReviewActionError(null)
-
-    resumeSyncAfterStaleReview()
-
-    setScreen('home')
 
   }
 
@@ -7821,29 +7594,6 @@ async function openPatient(
         )}
 
 
-        {pendingStaleReview && pendingStaleReview.length > 0 && (
-
-          <div className="patient-conflict-banner-container">
-
-            <button
-              type="button"
-              className="patient-conflict-banner"
-              onClick={() => setScreen('staleReview')}
-            >
-              ⚠ Review needed before syncing can continue (
-              {
-                pendingStaleReview.filter(
-                  candidate => !staleReviewDecidedIds.has(candidate.patientId)
-                ).length
-              }
-              )
-            </button>
-
-          </div>
-
-        )}
-
-
         <div className="home-nav-grid">
 
           <button
@@ -8328,13 +8078,7 @@ const patientTreatments =
 
         <div className="top-header">
 
-          <BackButton
-            onClick={
-              staleReviewReturnActive
-                ? returnFromStaleReviewPatientView
-                : backToHome
-            }
-          />
+          <BackButton onClick={backToHome} />
 
           <div className="title-block">
             <h1>
@@ -11238,182 +10982,6 @@ const patientTreatments =
           ))}
 
         </div>
-
-      </div>
-
-    )
-
-  }
-
-
-  if (screen === 'staleReview') {
-
-    const candidates = pendingStaleReview ?? []
-
-    const remainingCandidates = candidates.filter(
-      candidate => !staleReviewDecidedIds.has(candidate.patientId)
-    )
-
-    const staleReviewDiscardTarget =
-      staleReviewDiscardTargetId
-        ? candidates.find(
-            candidate => candidate.patientId === staleReviewDiscardTargetId
-          ) ?? null
-        : null
-
-    return (
-
-      <div className="app">
-
-        <div className="top-header">
-
-          <BackButton onClick={backToHome} />
-
-          <div className="title-block">
-            <h1>
-              Review Before Syncing
-            </h1>
-          </div>
-
-        </div>
-
-
-        <div className="procedure-page">
-
-          <p>
-            This device hasn't synced to the cloud in over a month.
-            The patients below were added on this device but have
-            never reached the cloud, and none are marked for deletion.
-            Review each one - keep it to sync it normally, or discard
-            it if it shouldn't be kept - before syncing continues.
-          </p>
-
-          {staleReviewActionError && (
-            <p className="conflict-resolution-error">
-              {staleReviewActionError}
-            </p>
-          )}
-
-          {remainingCandidates.length === 0 ? (
-
-            <>
-
-              <p className="empty-message">
-                All patients reviewed.
-              </p>
-
-              <button
-                type="button"
-                onClick={finishStaleReview}
-              >
-                Continue Syncing
-              </button>
-
-            </>
-
-          ) : (
-
-            remainingCandidates.map(candidate => (
-
-              <div
-                className="treatment-card incomplete-treatment"
-                key={candidate.patientId}
-              >
-
-                <div>
-
-                  <strong>
-                    #{candidate.patientNumber} — {candidate.name}
-                  </strong>
-
-                  <p>
-                    {candidate.completedTreatmentCount} completed
-                    treatment{candidate.completedTreatmentCount === 1 ? '' : 's'}
-                  </p>
-
-                  <small>
-                    Last edited {formatDate(candidate.lastEditedAt)}
-                  </small>
-
-                </div>
-
-                <div className="incomplete-treatment-actions">
-
-                  <button
-                    type="button"
-                    onClick={() => viewStaleReviewPatientRecord(candidate)}
-                  >
-                    View Full Record
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => keepStaleReviewPatient(candidate.patientId)}
-                  >
-                    Keep
-                  </button>
-
-                  <button
-                    type="button"
-                    className="button-danger"
-                    onClick={
-                      () => requestDiscardStaleReviewPatient(candidate.patientId)
-                    }
-                  >
-                    Discard
-                  </button>
-
-                </div>
-
-              </div>
-
-            ))
-
-          )}
-
-        </div>
-
-
-        {staleReviewDiscardTarget && (
-
-          <div className="modal-overlay">
-
-            <div className="modal-card">
-
-              <h2>
-                Discard {staleReviewDiscardTarget.name}?
-              </h2>
-
-              <p>
-                This removes the patient and their treatment history
-                from this device, the same as deleting them normally.
-                This action cannot be undone.
-              </p>
-
-              <div className="modal-actions">
-
-                <button
-                  type="button"
-                  onClick={cancelDiscardStaleReviewPatient}
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="button"
-                  className="button-danger"
-                  onClick={confirmDiscardStaleReviewPatient}
-                >
-                  Discard
-                </button>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        )}
 
       </div>
 

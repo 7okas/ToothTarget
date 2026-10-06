@@ -51,7 +51,6 @@ describe('isCorruptedSyncOutcome - correctly identifies an unreadable live sync 
       'synced',
       'synced-after-conflict',
       'patient-number-conflicts',
-      'review-needed',
       'save-incomplete',
       'sync-busy',
       'cloud-data-corrupted',

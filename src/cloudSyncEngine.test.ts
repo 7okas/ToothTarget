@@ -29,7 +29,6 @@ import type {
   SavedTreatment,
   ProcedureTemplate,
   Procedure,
-  DeletionTombstone,
 } from './App'
 
 import { reconcileSyncedAccount } from './cloudSyncEngine'
@@ -174,38 +173,16 @@ function makeProcedure(overrides: Partial<Procedure> = {}): Procedure {
   }
 }
 
-/*
-  deletedAt defaults to "right now" (Phase 4.7), not a fixed literal
-  date - see cloudSync.integration.test.ts's own copy of this factory
-  for why: a fixed past date eventually falls outside
-  pruneExpiredTombstones()'s window as real time passes, silently
-  pruning it out of every test that uses the default without meaning
-  to exercise expiry at all.
-*/
-function makeTombstone(
-  overrides: Partial<DeletionTombstone> = {}
-): DeletionTombstone {
-  return {
-    id: 'tombstone-1',
-    entityType: 'patient',
-    entityId: 'patient-1',
-    deletedAt: new Date().toISOString(),
-    ...overrides,
-  }
-}
-
 function seedLocalSynchronizedData(overrides: {
   patients?: Patient[]
   savedTreatments?: SavedTreatment[]
   templates?: ProcedureTemplate[]
   procedures?: Procedure[]
-  tombstones?: DeletionTombstone[]
 }): void {
   seed('toothTargetPatients', overrides.patients ?? [])
   seed('toothTargetSavedTreatments', overrides.savedTreatments ?? [])
   seed('toothTargetTemplates', overrides.templates ?? [makeBuiltinTemplate()])
   seed('toothTargetProcedures', overrides.procedures ?? [])
-  seed('toothTargetDeletionTombstones', overrides.tombstones ?? [])
 }
 
 describe('reconcileSyncedAccount - per-account local caches (Phase 4)', () => {
@@ -250,7 +227,6 @@ describe('reconcileSyncedAccount - per-account local caches (Phase 4)', () => {
       savedTreatments: [makeSavedTreatment()],
       templates: [makeBuiltinTemplate(), makeTemplate({ id: 'custom-t' })],
       procedures: [makeProcedure({ id: 'custom-p' })],
-      tombstones: [makeTombstone()],
     })
 
     seed('toothTargetNextPatientNumber', 42)

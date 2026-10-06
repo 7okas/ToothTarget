@@ -30,7 +30,6 @@ export type SyncOutcomeType =
   | 'synced'
   | 'synced-after-conflict'
   | 'patient-number-conflicts'
-  | 'review-needed'
   | 'save-incomplete'
   | 'sync-busy'
   | 'cloud-data-corrupted'
@@ -80,9 +79,6 @@ export function classifySyncOutcome(
 
     case 'synced-with-conflicts':
       return { type: 'patient-number-conflicts' }
-
-    case 'stale-review-required':
-      return { type: 'review-needed' }
 
     case 'cloud-committed-locally-pending':
       return { type: 'save-incomplete' }
@@ -172,20 +168,6 @@ export const SYNC_OUTCOME_COPY: Record<SyncOutcomeType, SyncOutcomeCopy> = {
   'patient-number-conflicts': {
     label: 'Synced — needs attention',
     detail: 'Synced, but some patient numbers need your attention',
-    needsAttention: true,
-  },
-
-  /*
-    This device hasn't synced in a while and has local-only patients
-    the dentist needs to review before syncing can continue (Phase
-    4.7's stale-record review screen already owns the full explanation
-    and the banner on Home) - this badge entry exists purely so the
-    small persistent indicator never falls back to a generic failure
-    message while that review is pending.
-  */
-  'review-needed': {
-    label: 'Review needed',
-    detail: 'Review needed before syncing can continue',
     needsAttention: true,
   },
 

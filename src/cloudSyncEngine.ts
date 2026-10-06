@@ -7,20 +7,6 @@ import {
   type CloudSyncDocument,
 } from './cloudSync'
 
-/*
-  mergeCloudSyncDocuments()/pruneExpiredTombstones() (cloudMerge.ts),
-  recordAndReconcilePatientNumberConflicts() (patientNumberConflicts.ts),
-  isDeviceSyncStale()/findStaleReviewCandidates() (deviceSyncTracking.ts/
-  staleRecordReview.ts) are no longer imported here - Phase 5 (single-
-  writer sync model) removed their one caller in this file (the old
-  performSync()). None of those modules themselves were touched; they
-  keep compiling and keep passing their own tests, simply with one
-  fewer caller. PatientNumberConflict/StaleReviewCandidate stay as
-  type-only imports - CloudSyncResult's own type still carries them
-  (patientNumberConflicts on every success; the now-unconstructed-from-
-  here 'stale-review-required' variant still exists in the union, per
-  this phase's own instruction to keep that shape unchanged).
-*/
 import type { PatientNumberConflict } from './patientNumberConflicts'
 
 import {
@@ -34,7 +20,6 @@ import type { CloudSyncCorruptionDiagnosis } from './cloudSyncCorruptionDiagnosi
 
 import { recordDeviceSyncSuccess } from './deviceSyncTracking'
 
-import type { StaleReviewCandidate } from './staleRecordReview'
 
 /*
   CLOUD SYNC ENGINE (Phase 6 - orchestration)
@@ -1158,7 +1143,6 @@ export type CloudSyncResult =
       patientNumberConflicts: PatientNumberConflict[]
       recoveredFromConflict?: boolean
     }
-  | { status: 'stale-review-required'; candidates: StaleReviewCandidate[] }
   | { status: 'cloud-committed-locally-pending'; detail: string }
   | { status: 'contention'; attempts: number }
   | {
@@ -1188,19 +1172,6 @@ export type CloudSyncResult =
   | CloudSyncTransportFailure
 
 /*
-  Phase 5 (single-writer sync model) removed this type's one real
-  consumer (the old per-record-merge performSync(), which used
-  skipStaleReviewCheck to skip its own stale-device review gate) -
-  kept, unused by syncCloudNow() below, per this phase's own
-  instruction not to delete Phase 4.7's stale-review machinery yet.
-  cloudSyncScheduler.ts's resumeSyncAfterStaleReview()/
-  skipStaleReviewCheckOnce still construct/reference this shape.
-*/
-export type PerformSyncOptions = {
-  skipStaleReviewCheck?: boolean
-}
-
-/*
   ENTRY POINT (push side)
 
   The only push function anything outside this file should call. Guards
@@ -1210,22 +1181,12 @@ export type PerformSyncOptions = {
   cache, not a new lock; Web Locks/cross-tab coordination is explicitly
   out of scope for this phase.
 
-  Phase 5 (single-writer sync model) - now calls pushLocalSnapshot()
-  instead of the old per-record-merge performSync() (removed from this
-  file; see this file's own header comment on what's replaced vs what's
-  untouched elsewhere). `options` is accepted but unused - nothing
-  pushLocalSnapshot() does has a stale-review gate to skip - kept only
-  so cloudSyncScheduler.ts's existing call site keeps compiling; a
-  later step in this same phase removes the pass-through there too.
+  Phase 5 (single-writer sync model) - calls pushLocalSnapshot().
 */
 
 let inFlightSync: Promise<CloudSyncResult> | null = null
 
-export function syncCloudNow(
-  options?: PerformSyncOptions
-): Promise<CloudSyncResult> {
-
-  void options
+export function syncCloudNow(): Promise<CloudSyncResult> {
 
   if (inFlightSync) {
     return inFlightSync

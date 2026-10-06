@@ -38,7 +38,6 @@ import type {
   SavedTreatment,
   ProcedureTemplate,
   Procedure,
-  DeletionTombstone,
 } from './App'
 
 import {
@@ -120,13 +119,11 @@ function seedSynchronized(overrides: {
   savedTreatments?: SavedTreatment[]
   templates?: ProcedureTemplate[]
   procedures?: Procedure[]
-  tombstones?: DeletionTombstone[]
 }): void {
   seed('toothTargetPatients', overrides.patients ?? [])
   seed('toothTargetSavedTreatments', overrides.savedTreatments ?? [])
   seed('toothTargetTemplates', overrides.templates ?? [makeBuiltinTemplate()])
   seed('toothTargetProcedures', overrides.procedures ?? [])
-  seed('toothTargetDeletionTombstones', overrides.tombstones ?? [])
 }
 
 /* ============================================================
@@ -299,29 +296,6 @@ function makeBuiltinTemplate(
   return {
     ...makeTemplate({ id: 'general', name: 'General Procedure', ...overrides }),
     isCustom: false,
-  }
-}
-
-/*
-  deletedAt defaults to "right now" (Phase 4.7), not a fixed literal
-  date - these tests' own narratives always mean "a tombstone that was
-  JUST created" unless a test explicitly overrides deletedAt to
-  exercise tombstone-expiry pruning itself (see cloudSyncEngine.ts's
-  pruneExpiredTombstones() and this file's own expiry-specific tests),
-  so a fixed literal date would eventually - and, once real time simply
-  passes ~1 month past whatever date was hardcoded, silently - start
-  being pruned as "expired" by every OTHER test that never meant to
-  exercise expiry at all.
-*/
-function makeTombstone(
-  overrides: Partial<DeletionTombstone> = {}
-): DeletionTombstone {
-  return {
-    id: 'tombstone-1',
-    entityType: 'patient',
-    entityId: 'patient-1',
-    deletedAt: new Date().toISOString(),
-    ...overrides,
   }
 }
 
@@ -576,14 +550,12 @@ describe('no-local-change and repeated synchronization', () => {
 
     const patient = makePatient({ id: 'a' })
     const template = makeTemplate({ id: 'tmpl-a' })
-    const tombstone = makeTombstone({ entityId: 'zzz' })
 
     const device = new MemoryStorage()
     useDevice(device)
     seedSynchronized({
       patients: [patient],
       templates: [makeBuiltinTemplate(), template],
-      tombstones: [tombstone],
     })
     seed('toothTargetNextPatientNumber', 50)
     seed('toothTargetActiveTreatment', { id: 'active-marker' })
@@ -593,9 +565,6 @@ describe('no-local-change and repeated synchronization', () => {
 
     const patientsBefore = readKey<Patient[]>('toothTargetPatients')
     const templatesBefore = readKey<ProcedureTemplate[]>('toothTargetTemplates')
-    const tombstonesBefore = readKey<DeletionTombstone[]>(
-      'toothTargetDeletionTombstones'
-    )
     const counterBefore = readKey<number>('toothTargetNextPatientNumber')
 
     const result = await syncCloudNow()
@@ -605,9 +574,6 @@ describe('no-local-change and repeated synchronization', () => {
     expect(readKey<ProcedureTemplate[]>('toothTargetTemplates')).toEqual(
       templatesBefore
     )
-    expect(
-      readKey<DeletionTombstone[]>('toothTargetDeletionTombstones')
-    ).toEqual(tombstonesBefore)
     expect(readKey<number>('toothTargetNextPatientNumber')).toBe(
       counterBefore
     )
