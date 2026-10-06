@@ -2291,6 +2291,49 @@ button:disabled:hover {
   table scrolls inside its own box if the screen is narrow.
 */
 
+/*
+  PHASE-NAME HINT (Phase 9) - the "did you mean ...?" notice under a
+  phase-name field. 16px text and 44px buttons for the iPad.
+*/
+
+.phase-name-hint {
+  margin: var(--space-2) 0 var(--space-3) 0;
+  padding: var(--space-3);
+  text-align: left;
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+}
+
+.phase-name-hint-text {
+  margin: 0 0 var(--space-2) 0;
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--color-text);
+}
+
+.phase-name-hint-usage {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.phase-name-hint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.phase-name-hint-button {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.phase-name-hint-secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1.5px solid var(--color-border-strong);
+}
+
 .monthly-filter-note {
   margin: 0 0 var(--space-3) 0;
   text-align: center;
