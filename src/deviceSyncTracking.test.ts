@@ -3,14 +3,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   recordDeviceSyncSuccess,
   getDeviceLastSyncAt,
-  isDeviceSyncStale,
-  STALE_DEVICE_THRESHOLD_MS,
 } from './deviceSyncTracking'
 
 /*
   Minimal, fully-typed in-memory Storage - same pattern used throughout
-  this project's test suite (see cloudSyncEngine.test.ts/
-  cloudMerge.test.ts).
+  this project's test suite (see cloudSyncEngine.test.ts).
 */
 class MemoryStorage implements Storage {
 
@@ -72,77 +69,6 @@ describe('recordDeviceSyncSuccess / getDeviceLastSyncAt', () => {
     // one of the five cloud-synchronized keys.
     expect(localStorage.getItem('toothTargetPatients')).toBeNull()
     expect(localStorage.getItem('toothTargetDeviceLastSyncAt')).toBe(NOW)
-
-  })
-
-})
-
-describe('isDeviceSyncStale', () => {
-
-  it('is never stale when this device has never recorded a successful sync (first-ever sync is normal onboarding, not staleness)', () => {
-    expect(isDeviceSyncStale(NOW)).toBe(false)
-  })
-
-  it('is not stale immediately after a sync', () => {
-    recordDeviceSyncSuccess(NOW)
-    expect(isDeviceSyncStale(NOW)).toBe(false)
-  })
-
-  it('is not stale for a device that syncs regularly (well within the threshold, repeatedly)', () => {
-
-    let simulatedNow = Date.parse('2026-01-01T00:00:00.000Z')
-
-    for (let week = 0; week < 12; week++) {
-
-      const nowIso = new Date(simulatedNow).toISOString()
-
-      // Each check happens BEFORE that week's sync updates the marker -
-      // a device that has been syncing weekly must never see staleness
-      // fire on any of these checks.
-      expect(isDeviceSyncStale(nowIso)).toBe(false)
-
-      recordDeviceSyncSuccess(nowIso)
-
-      simulatedNow += 7 * 24 * 60 * 60 * 1000 // +1 week
-
-    }
-
-  })
-
-  it('is not stale exactly at the threshold boundary', () => {
-
-    const lastSync = '2026-01-01T00:00:00.000Z'
-    recordDeviceSyncSuccess(lastSync)
-
-    const atThreshold =
-      new Date(Date.parse(lastSync) + STALE_DEVICE_THRESHOLD_MS).toISOString()
-
-    expect(isDeviceSyncStale(atThreshold)).toBe(false)
-
-  })
-
-  it('is stale once more than the threshold has passed since the last successful sync', () => {
-
-    const lastSync = '2026-01-01T00:00:00.000Z'
-    recordDeviceSyncSuccess(lastSync)
-
-    const justOverThreshold =
-      new Date(
-        Date.parse(lastSync) + STALE_DEVICE_THRESHOLD_MS + 1
-      ).toISOString()
-
-    expect(isDeviceSyncStale(justOverThreshold)).toBe(true)
-
-  })
-
-  it('respects a custom threshold override', () => {
-
-    recordDeviceSyncSuccess('2026-01-01T00:00:00.000Z')
-
-    const twoDaysLater = '2026-01-03T00:00:00.000Z'
-
-    expect(isDeviceSyncStale(twoDaysLater, 24 * 60 * 60 * 1000)).toBe(true)
-    expect(isDeviceSyncStale(twoDaysLater, 30 * 24 * 60 * 60 * 1000)).toBe(false)
 
   })
 

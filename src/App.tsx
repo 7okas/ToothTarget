@@ -24,7 +24,6 @@ import {
   findProcedureOption,
   findTypeOption,
 } from './templateTaxonomy'
-import type { PatientNumberConflict } from './cloudMerge'
 import {
   readPersistedPatientNumberConflicts,
   isValidPatientNumberConflict,
@@ -34,6 +33,7 @@ import {
   resolvePatientNumberConflict,
   computeNextPatientNumber,
   detectPatientNumberConflict,
+  type PatientNumberConflict,
 } from './patientNumberConflicts'
 import { planPatientDeletionCascade } from './patientDeletionCascade'
 import { applyPatientRenameToSavedTreatments } from './patientRenameCascade'

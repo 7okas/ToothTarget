@@ -21,7 +21,7 @@ import {
   here 'stale-review-required' variant still exists in the union, per
   this phase's own instruction to keep that shape unchanged).
 */
-import type { PatientNumberConflict } from './cloudMerge'
+import type { PatientNumberConflict } from './patientNumberConflicts'
 
 import {
   readCloudSyncDocument,

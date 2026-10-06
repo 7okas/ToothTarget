@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { Patient } from './App'
-import type { PatientNumberConflict } from './cloudMerge'
 
 import {
+  type PatientNumberConflict,
   PATIENT_NUMBER_CONFLICTS_KEY,
   isValidPatientNumberConflict,
   readPersistedPatientNumberConflicts,

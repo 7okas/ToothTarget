@@ -1,18 +1,17 @@
 import type { Patient } from './App'
-import type { PatientNumberConflict } from './cloudMerge'
 
 /*
   PATIENT-NUMBER CONFLICTS (Phase 4 - cloud sync foundation)
 
-  A future cloud merge (see cloudMerge.ts's mergeCloudSyncDocuments())
-  can report that two different patient UUIDs ended up holding the
-  same patientNumber - eg. two devices each allocated "#12" to a
-  different patient while offline. That can NEVER happen from normal
-  local use of App.tsx's own allocatePatientUnderLock() (it always
-  reads the current registry fresh under the allocation lock before
-  handing out a number), so this mechanism exists purely to record and
-  let the dentist explicitly resolve a collision that arrived from
-  elsewhere - nothing in this file ever creates one on its own.
+  Two different patient UUIDs holding the same patientNumber - eg. two
+  devices each allocated "#12" to a different patient while offline.
+  That can NEVER happen from normal local use of App.tsx's own
+  allocatePatientUnderLock() (it always reads the current registry
+  fresh under the allocation lock before handing out a number), so this
+  mechanism exists purely to record and let the dentist explicitly
+  resolve a collision that arrived from elsewhere (a collision found
+  right after allocating, or one persisted by an earlier version) -
+  nothing in this file ever creates one on its own.
 
   This is a SEPARATE module (not more code added directly to App.tsx)
   specifically so it can be unit-tested in isolation: App.tsx pulls in
@@ -20,7 +19,7 @@ import type { PatientNumberConflict } from './cloudMerge'
   `window.location` and instantiate MSAL's PublicClientApplication at
   module load time - importing App.tsx from a plain Vitest test would
   crash before any test body even runs. Only TYPE-ONLY imports are
-  taken from App.tsx/cloudMerge.ts above (erased entirely at compile
+  taken from App.tsx above (erased entirely at compile
   time under verbatimModuleSyntax), so this module has zero runtime
   dependency on either of them and is safe to import directly in
   tests. Consequently, readPersistedPatients()/
@@ -43,6 +42,11 @@ import type { PatientNumberConflict } from './cloudMerge'
   truth for every other detail; this store only needs to remember
   WHICH numbers/UUIDs are still in collision.
 */
+
+export type PatientNumberConflict = {
+  patientNumber: number
+  patientIds: string[]
+}
 
 const PATIENTS_KEY = 'toothTargetPatients'
 const NEXT_PATIENT_NUMBER_KEY = 'toothTargetNextPatientNumber'
