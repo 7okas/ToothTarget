@@ -167,7 +167,7 @@ export function computeStartupGateView(
 
   if (state.phase === 'error') {
 
-    return outcome?.type === 'diverged'
+    return outcome?.state === 'conflict'
       ? { kind: 'diverged' }
       : { kind: 'error', outcome }
 

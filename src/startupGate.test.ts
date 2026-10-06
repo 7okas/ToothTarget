@@ -6,10 +6,11 @@ import {
   INITIAL_STARTUP_GATE_STATE,
   type StartupGateState,
 } from './startupGate'
-import type { SyncOutcomeReason } from './syncOutcome'
+import { classifySyncOutcome, type SyncOutcomeReason } from './syncOutcome'
 
-const SYNCED_OUTCOME: SyncOutcomeReason = { type: 'synced' }
-const OFFLINE_OUTCOME: SyncOutcomeReason = { type: 'offline' }
+const SYNCED_OUTCOME: SyncOutcomeReason = classifySyncOutcome({ status: 'synced' })
+const OFFLINE_OUTCOME: SyncOutcomeReason = classifySyncOutcome({ status: 'network-unreachable', detail: 'x' })
+const DIVERGED_OUTCOME: SyncOutcomeReason = classifySyncOutcome({ status: 'diverged', detail: 'x' })
 
 /*
   Pure-logic-only, same constraint as StartupSyncOverlay.test.ts /
@@ -198,7 +199,7 @@ describe('computeStartupGateView - what the gate shows', () => {
   it('Phase 6: a diverged outcome gets its own view (route to the resolution screen), never the generic error/Retry view', () => {
 
     expect(
-      computeStartupGateView(true, { passed: false, phase: 'error' }, { type: 'diverged' })
+      computeStartupGateView(true, { passed: false, phase: 'error' }, DIVERGED_OUTCOME)
     ).toEqual({ kind: 'diverged' })
 
   })
@@ -206,18 +207,28 @@ describe('computeStartupGateView - what the gate shows', () => {
   it('Phase 6: "Continue without syncing" still works from the diverged view - once passed it is "passed"', () => {
 
     expect(
-      computeStartupGateView(true, { passed: true, phase: 'error' }, { type: 'diverged' })
+      computeStartupGateView(true, { passed: true, phase: 'error' }, DIVERGED_OUTCOME)
     ).toEqual({ kind: 'passed' })
 
   })
 
   it('Phase 6: only the diverged outcome changes view; every other failure keeps the error view', () => {
 
-    for (const type of ['offline', 'not-signed-in', 'cloud-data-corrupted'] as const) {
+    const others = [
+      { status: 'network-unreachable', detail: 'x' },
+      { status: 'auth-failed' },
+      { status: 'cloud-invalid', detail: 'x' },
+      { status: 'validation-failed', detail: 'x' },
+      { status: 'graph-error', detail: 'x' },
+    ] as const
+
+    for (const result of others) {
+
+      const outcome = classifySyncOutcome(result)
 
       expect(
-        computeStartupGateView(true, { passed: false, phase: 'error' }, { type })
-      ).toEqual({ kind: 'error', outcome: { type } })
+        computeStartupGateView(true, { passed: false, phase: 'error' }, outcome)
+      ).toEqual({ kind: 'error', outcome })
 
     }
 
@@ -229,13 +240,13 @@ describe('computeStartupGateView - what the gate shows', () => {
 
   it('shows the specific classified outcome on failure, not a generic error', () => {
 
-    const outcome = { type: 'offline' as const }
+    const outcome = OFFLINE_OUTCOME
 
     expect(
       computeStartupGateView(true, { passed: false, phase: 'error' }, outcome)
     ).toEqual({ kind: 'error', outcome })
 
-    const authOutcome = { type: 'not-signed-in' as const }
+    const authOutcome = classifySyncOutcome({ status: 'auth-failed' })
 
     expect(
       computeStartupGateView(true, { passed: false, phase: 'error' }, authOutcome)

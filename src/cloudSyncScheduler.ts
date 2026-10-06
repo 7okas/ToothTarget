@@ -6,7 +6,6 @@ import {
 } from './cloudSyncEngine'
 import {
   classifySyncOutcome,
-  SYNC_STATE_OF_OUTCOME,
   type SyncOutcomeReason,
   type SyncState,
 } from './syncOutcome'
@@ -295,7 +294,7 @@ export function notifyLocalDataReplaced(): void {
 
 export function reportResolutionApplied(): void {
 
-  setLastSyncOutcome({ type: 'synced' })
+  setLastSyncOutcome({ state: 'synced', detail: 'Synced' })
   setStatus('synced')
   bumpLocalDataVersion()
 
@@ -383,7 +382,7 @@ function startIfIdle(): void {
           maybeRotateBackup().catch(() => {})
         }
 
-        return { succeeded, state: SYNC_STATE_OF_OUTCOME[outcome.type] }
+        return { succeeded, state: outcome.state }
 
       },
       () => {

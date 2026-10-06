@@ -9,6 +9,8 @@ import {
 import {
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
+  getLastSyncOutcome,
+  subscribeLastSyncOutcome,
   requestCloudSync,
   requestCloudPullIfSignedIn,
 } from './cloudSyncScheduler'
@@ -96,6 +98,11 @@ export default function MicrosoftAccountSection() {
   const cloudSyncStatus = useSyncExternalStore(
     subscribeCloudSyncStatus,
     getCloudSyncStatus
+  )
+
+  const lastSyncOutcome = useSyncExternalStore(
+    subscribeLastSyncOutcome,
+    getLastSyncOutcome
   )
 
   const [isReady, setIsReady] =
@@ -252,6 +259,14 @@ export default function MicrosoftAccountSection() {
           <p className="settings-section-description cloud-sync-status">
             {CLOUD_SYNC_STATUS_LABEL[cloudSyncStatus]}
           </p>
+
+          {lastSyncOutcome &&
+            lastSyncOutcome.state !== 'synced' &&
+            lastSyncOutcome.state === cloudSyncStatus && (
+              <p className="settings-section-description cloud-sync-status-detail">
+                {lastSyncOutcome.detail}
+              </p>
+            )}
 
           <div className="options-menu-list settings-actions">
 

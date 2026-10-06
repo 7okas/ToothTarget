@@ -133,7 +133,27 @@ export function canReviewDifferencesFromBadge(
   icon: SyncIconState,
   outcome: SyncOutcomeReason | null
 ): boolean {
-  return icon === 'attention' && outcome?.type === 'diverged'
+  return icon === 'attention' && outcome?.state === 'conflict'
+}
+
+/*
+  TAP FOR THE DETAIL LINE
+
+  The specific reason must be reachable by touch, never hover-only (the
+  target is an iPad). While the badge shows the offline/needs-input
+  icon, tapping it opens a small panel with the detail line. The
+  conflict state is excluded on purpose: its tap already opens the
+  resolution screen, and the success state's tap is the manual sync.
+*/
+export function canShowDetailFromBadge(
+  icon: SyncIconState,
+  outcome: SyncOutcomeReason | null
+): boolean {
+  return (
+    (icon === 'failure' || icon === 'attention') &&
+    outcome !== null &&
+    (outcome.state === 'offline' || outcome.state === 'needs-input')
+  )
 }
 
 /*

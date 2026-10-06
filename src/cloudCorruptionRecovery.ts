@@ -13,9 +13,9 @@ import {
 
   Reacts to an outcome the sync engine already detects and classifies
   on its own (cloudSyncEngine.ts's 'cloud-invalid' CloudSyncResult ->
-  syncOutcome.ts's classifySyncOutcome() -> SyncOutcomeType
-  'cloud-data-corrupted') - this file adds NO new detection of its
-  own and does not touch cloudSyncEngine.ts/cloudSync.ts/cloudMerge.ts
+  syncOutcome.ts's classifySyncOutcome() -> a 'needs-input' outcome that
+  carries a corruption diagnosis) - this file adds NO new detection of its
+  own and does not touch cloudSyncEngine.ts/cloudSync.ts
   at all. It only decides what to OFFER once that outcome appears,
   and (only on explicit confirmation) reuses cloudBackup.ts's existing
   applyCloudRestore() to actually load a chosen backup locally -
@@ -34,8 +34,10 @@ import {
 */
 export function isCorruptedSyncOutcome(
   outcome: SyncOutcomeReason | null
-): outcome is SyncOutcomeReason & { type: 'cloud-data-corrupted' } {
-  return outcome?.type === 'cloud-data-corrupted'
+): outcome is SyncOutcomeReason & {
+  diagnosis: NonNullable<SyncOutcomeReason['diagnosis']>
+} {
+  return outcome?.state === 'needs-input' && outcome.diagnosis !== undefined
 }
 
 export type NewestValidBackup = {

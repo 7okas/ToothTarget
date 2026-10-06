@@ -26,7 +26,8 @@ import {
   findNewestValidBackup,
   checkAllBackupSlots,
 } from './cloudCorruptionRecovery'
-import type { SyncOutcomeReason, SyncOutcomeType } from './syncOutcome'
+import { classifySyncOutcome } from './syncOutcome'
+import type { CloudSyncResult } from './cloudSyncEngine'
 
 const mockedListFiles = vi.mocked(listAppFolderFileNames)
 const mockedReadData = vi.mocked(readCloudData)
@@ -45,26 +46,44 @@ function makeBackup(exportedAt: string): CloudBackup {
 
 describe('isCorruptedSyncOutcome - correctly identifies an unreadable live sync file', () => {
 
-  it('is true for the cloud-data-corrupted outcome, and only that one', () => {
+  it('is true for a cloud-invalid result, and for no other result', () => {
 
-    const allTypes: SyncOutcomeType[] = [
-      'synced',
-      'save-incomplete',
-      'cloud-data-corrupted',
-      'local-data-invalid',
-      'not-signed-in',
-      'sign-in-denied',
-      'offline',
-      'onedrive-unavailable',
+    const results: CloudSyncResult[] = [
+      { status: 'synced' },
+      { status: 'cloud-committed-locally-pending', detail: 'x' },
+      { status: 'cloud-invalid', detail: 'x' },
+      {
+        status: 'cloud-invalid',
+        detail: 'x',
+        diagnosis: { kind: 'unreadable', reason: 'could not be parsed' },
+      },
+      { status: 'validation-failed', detail: 'x' },
+      { status: 'diverged', detail: 'x' },
+      { status: 'auth-failed' },
+      { status: 'permission-denied', detail: 'x' },
+      { status: 'network-unreachable', detail: 'x' },
+      { status: 'graph-error', detail: 'x' },
     ]
 
-    for (const type of allTypes) {
-
-      const reason: SyncOutcomeReason = { type }
-
-      expect(isCorruptedSyncOutcome(reason)).toBe(type === 'cloud-data-corrupted')
-
+    for (const result of results) {
+      expect(isCorruptedSyncOutcome(classifySyncOutcome(result))).toBe(
+        result.status === 'cloud-invalid'
+      )
     }
+
+  })
+
+  it('keeps the engine\'s own diagnosis, and supplies a generic one when the engine gave none', () => {
+
+    const diagnosis = { kind: 'unreadable', reason: 'could not be parsed' } as const
+
+    expect(
+      classifySyncOutcome({ status: 'cloud-invalid', detail: 'x', diagnosis }).diagnosis
+    ).toEqual(diagnosis)
+
+    expect(
+      classifySyncOutcome({ status: 'cloud-invalid', detail: 'x' }).diagnosis
+    ).toEqual({ kind: 'unreadable', reason: 'The cloud file failed validation.' })
 
   })
 
@@ -72,8 +91,8 @@ describe('isCorruptedSyncOutcome - correctly identifies an unreadable live sync 
     expect(isCorruptedSyncOutcome(null)).toBe(false)
   })
 
-  it('is false for local-data-invalid - a real failure, but not "the cloud file is unreadable"', () => {
-    expect(isCorruptedSyncOutcome({ type: 'local-data-invalid' })).toBe(false)
+  it('is false for validation-failed - a real failure, but not "the cloud file is unreadable"', () => {
+    expect(isCorruptedSyncOutcome(classifySyncOutcome({ status: 'validation-failed', detail: 'x' }))).toBe(false)
   })
 
 })

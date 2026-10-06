@@ -16,6 +16,7 @@ import {
   reduceSyncIndicatorState,
   canTriggerManualSync,
   canReviewDifferencesFromBadge,
+  canShowDetailFromBadge,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
   type SyncIconState,
@@ -61,6 +62,15 @@ import {
   needs the dentist's attention or will simply resolve itself - this
   component only ever renders whatever that returns, it never
   re-interprets a CloudSyncResult or a CloudSyncStatus itself.
+
+  PHASE 7 - FOUR STATES, DETAIL BY TAP
+  ------------------------------------------------------------
+  The badge text is one of four state headings (Synced / Offline, will
+  retry / Sync conflict / Needs your input). The specific reason is the
+  outcome's one-line detail, reachable by TAP (iPad: nothing is
+  hover-only): tapping the offline/needs-input badge opens a small
+  panel with it, the conflict badge opens the resolution screen, and
+  the Settings sync section always shows the same line.
 */
 
 /*
@@ -117,6 +127,15 @@ export default function SyncStatusIndicator() {
   )
 
   const [fading, setFading] = useState(false)
+
+  /*
+    Tap-to-open detail panel. Remembers WHICH outcome it was opened for
+    (by identity) rather than a plain boolean, so the panel closes by
+    itself the moment a new outcome arrives, with no effect needed.
+  */
+  const [detailOpenFor, setDetailOpenFor] = useState<typeof outcome>(null)
+
+  const detailOpen = outcome !== null && detailOpenFor === outcome
 
   /*
     RELATIVE LAST-SYNC TIME (Phase 8 - UI polish)
@@ -214,7 +233,7 @@ export default function SyncStatusIndicator() {
   /*
     Not signed in: a persistent, gentle reminder rather than the old
     "show nothing" behavior - no icon, just red text (see this file's
-    header comment). Distinct from a 'not-signed-in' sync outcome
+    header comment). Distinct from a 'needs-input' sign-in-expired outcome
     (syncOutcome.ts) - that one means a sign-in EXPIRED after a sync was
     attempted; this branch means no Microsoft account is active at all,
     so no sync has been (or will be) attempted in the first place.
@@ -247,7 +266,6 @@ export default function SyncStatusIndicator() {
 
       {state.text && (
         <span
-          title={outcome ? describeSyncOutcome(outcome).detail : undefined}
           className={
             'sync-status-text' +
             (state.icon === 'attention' ? ' sync-status-text-attention' : '') +
@@ -296,6 +314,34 @@ export default function SyncStatusIndicator() {
         </span>
       </button>
     )
+  }
+
+  /*
+    Offline / needs-input: the whole badge is a button that opens the
+    detail line - by tap, so it works on an iPad (nothing is hover-only).
+  */
+  if (outcome && canShowDetailFromBadge(state.icon, outcome)) {
+
+    const copy = describeSyncOutcome(outcome)
+
+    return (
+      <button
+        type="button"
+        className="sync-status-badge sync-status-badge-clickable"
+        aria-expanded={detailOpen}
+        aria-label={`${copy.label}. ${detailOpen ? 'Hide' : 'Show'} details`}
+        onClick={() => setDetailOpenFor(detailOpen ? null : outcome)}
+      >
+        {badgeContent}
+        {detailOpen && (
+          <span className="sync-status-detail" role="status">
+            <strong>{copy.label}</strong>
+            <span>{copy.detail}</span>
+          </span>
+        )}
+      </button>
+    )
+
   }
 
   /*

@@ -31,6 +31,7 @@ import {
   reduceSyncIndicatorState,
   canTriggerManualSync,
   canReviewDifferencesFromBadge,
+  canShowDetailFromBadge,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
 } from './syncStatusIndicatorState'
@@ -38,13 +39,30 @@ import {
 import {
   describeSyncOutcome,
   type SyncOutcomeReason,
-  SYNC_STATE_OF_OUTCOME,
-  type SyncOutcomeType,
+  classifySyncOutcome,
 } from './syncOutcome'
+import type { CloudSyncResult } from './cloudSyncEngine'
 
-const SYNCED: SyncOutcomeReason = { type: 'synced' }
-const NOT_SIGNED_IN: SyncOutcomeReason = { type: 'not-signed-in' }
-const OFFLINE: SyncOutcomeReason = { type: 'offline' }
+/*
+  Every CloudSyncResult the engine can produce, classified for real - the
+  outcomes below are what the scheduler would actually store.
+*/
+const ALL_RESULTS: CloudSyncResult[] = [
+  { status: 'synced' },
+  { status: 'cloud-committed-locally-pending', detail: 'x' },
+  { status: 'cloud-invalid', detail: 'x' },
+  { status: 'validation-failed', detail: 'x' },
+  { status: 'diverged', detail: 'x' },
+  { status: 'auth-failed' },
+  { status: 'permission-denied', detail: 'x' },
+  { status: 'network-unreachable', detail: 'x' },
+  { status: 'graph-error', detail: 'x' },
+]
+
+const SYNCED: SyncOutcomeReason = classifySyncOutcome({ status: 'synced' })
+const NOT_SIGNED_IN: SyncOutcomeReason = classifySyncOutcome({ status: 'auth-failed' })
+const OFFLINE: SyncOutcomeReason = classifySyncOutcome({ status: 'network-unreachable', detail: 'x' })
+const DIVERGED: SyncOutcomeReason = classifySyncOutcome({ status: 'diverged', detail: 'x' })
 
 describe('reduceSyncIndicatorState - while syncing', () => {
 
@@ -194,45 +212,34 @@ describe('reduceSyncIndicatorState - a sync attempt just completed (fresh transi
 describe('reduceSyncIndicatorState - every classified outcome maps to a distinct, correctly-flagged entry', () => {
 
   /*
-    Exhaustive over every SyncOutcomeType (see syncOutcome.ts) - this
+    Exhaustive over every CloudSyncResult status (see syncOutcome.ts) - this
     is the test that would fail if a future outcome type were added to
     syncOutcome.ts without ever being reachable from a real sync
     transition, or if needsAttention/autoHide ever silently disagreed.
   */
-  const ALL_OUTCOME_TYPES: SyncOutcomeType[] = [
-    'synced',
-    'save-incomplete',
-    'cloud-data-corrupted',
-    'local-data-invalid',
-    'not-signed-in',
-    'sign-in-denied',
-    'offline',
-    'onedrive-unavailable',
-  ]
+  it.each(ALL_RESULTS.map(result => [result.status, result] as const))(
+    'result "%s": autoHide is always the exact opposite of needsAttention',
+    (_status, result) => {
 
-  it.each(ALL_OUTCOME_TYPES)(
-    'outcome "%s": autoHide is always the exact opposite of needsAttention',
-    type => {
-
-      const outcome: SyncOutcomeReason = { type }
+      const outcome = classifySyncOutcome(result)
       const copy = describeSyncOutcome(outcome)
 
-      const result = reduceSyncIndicatorState(
+      const reduced = reduceSyncIndicatorState(
         INITIAL_SYNC_INDICATOR_STATE,
         'syncing',
-        SYNC_STATE_OF_OUTCOME[type],
+        outcome.state,
         outcome
       )
 
-      expect(result.text?.autoHide).toBe(!copy.needsAttention)
-      expect(result.icon).toBe(
+      expect(reduced.text?.autoHide).toBe(!copy.needsAttention)
+      expect(reduced.icon).toBe(
         copy.needsAttention
           ? 'attention'
-          : SYNC_STATE_OF_OUTCOME[type] === 'synced'
+          : outcome.state === 'synced'
             ? 'success'
             : 'failure'
       )
-      expect(result.text?.label).toBe(copy.label)
+      expect(reduced.text?.label).toBe(copy.label)
 
     }
   )
@@ -401,19 +408,17 @@ describe('canReviewDifferencesFromBadge (Phase 6) - when the badge opens the res
 
   it('true only for the attention icon with the diverged outcome', () => {
 
-    expect(canReviewDifferencesFromBadge('attention', { type: 'diverged' })).toBe(true)
+    expect(canReviewDifferencesFromBadge('attention', DIVERGED)).toBe(true)
 
   })
 
   it('false for every other attention outcome - they each have a different next step', () => {
 
-    for (const type of [
-      'not-signed-in',
-      'cloud-data-corrupted',
-      'local-data-invalid',
-      'sign-in-denied',
-    ] as const) {
-      expect(canReviewDifferencesFromBadge('attention', { type })).toBe(false)
+    for (const result of ALL_RESULTS) {
+      const outcome = classifySyncOutcome(result)
+      expect(canReviewDifferencesFromBadge('attention', outcome)).toBe(
+        outcome.state === 'conflict'
+      )
     }
 
   })
@@ -421,7 +426,7 @@ describe('canReviewDifferencesFromBadge (Phase 6) - when the badge opens the res
   it('false for any other icon, even with a diverged outcome still stored', () => {
 
     for (const icon of ['spinner', 'success', 'failure', null] as const) {
-      expect(canReviewDifferencesFromBadge(icon, { type: 'diverged' })).toBe(false)
+      expect(canReviewDifferencesFromBadge(icon, DIVERGED)).toBe(false)
     }
 
   })
@@ -438,11 +443,49 @@ describe('canReviewDifferencesFromBadge (Phase 6) - when the badge opens the res
       { icon: 'attention', text: null, hasCompletedOnce: true },
       'synced',
       'synced',
-      { type: 'synced' }
+      SYNCED
     )
 
     expect(afterResolve.icon).toBe('success')
-    expect(canReviewDifferencesFromBadge(afterResolve.icon, { type: 'synced' })).toBe(false)
+    expect(canReviewDifferencesFromBadge(afterResolve.icon, SYNCED)).toBe(false)
+
+  })
+
+})
+
+describe('canShowDetailFromBadge - the detail line is reachable by tap (iPad), not hover', () => {
+
+  it('true for the offline and needs-input outcomes, with the matching failure/attention icon', () => {
+
+    expect(canShowDetailFromBadge('failure', OFFLINE)).toBe(true)
+    expect(canShowDetailFromBadge('attention', NOT_SIGNED_IN)).toBe(true)
+
+  })
+
+  it('true for every result that lands in offline or needs-input, and no other', () => {
+
+    for (const result of ALL_RESULTS) {
+      const outcome = classifySyncOutcome(result)
+      const icon = outcome.state === 'needs-input' ? 'attention' : 'failure'
+      expect(canShowDetailFromBadge(icon, outcome)).toBe(
+        outcome.state === 'offline' || outcome.state === 'needs-input'
+      )
+    }
+
+  })
+
+  it('false for conflict (tap opens the resolution screen) and for synced (tap is Sync now)', () => {
+
+    expect(canShowDetailFromBadge('attention', DIVERGED)).toBe(false)
+    expect(canShowDetailFromBadge('success', SYNCED)).toBe(false)
+
+  })
+
+  it('false while spinning, with no icon, or with no outcome', () => {
+
+    expect(canShowDetailFromBadge('spinner', OFFLINE)).toBe(false)
+    expect(canShowDetailFromBadge(null, OFFLINE)).toBe(false)
+    expect(canShowDetailFromBadge('failure', null)).toBe(false)
 
   })
 
