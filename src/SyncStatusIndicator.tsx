@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { getActiveAccount, subscribeToActiveAccount } from './auth'
+import { getActiveAccount, signIn, subscribeToActiveAccount } from './auth'
+import { reconcileSyncedAccount } from './cloudSyncEngine'
+import { signInAgain, startSyncNow } from './badgePanelActions'
 import {
   getCloudSyncStatus,
   subscribeCloudSyncStatus,
   getLastSyncOutcome,
   subscribeLastSyncOutcome,
   requestCloudSync,
+  requestCloudPullIfSignedIn,
   type CloudSyncStatus,
 } from './cloudSyncScheduler'
 import { describeSyncOutcome } from './syncOutcome'
@@ -17,6 +20,7 @@ import {
   canTriggerManualSync,
   canReviewDifferencesFromBadge,
   canShowDetailFromBadge,
+  badgePanelButton,
   INITIAL_SYNC_INDICATOR_STATE,
   type SyncIndicatorState,
   type SyncIconState,
@@ -138,6 +142,16 @@ export default function SyncStatusIndicator() {
   const detailOpen = outcome !== null && detailOpenFor === outcome
 
   /*
+    The panel's "Sign in again" button: busy while the sign-in window is
+    open, and the message of a failed or cancelled attempt (tied to the
+    outcome it happened under, so it disappears with that outcome).
+  */
+  const [signingIn, setSigningIn] = useState(false)
+
+  const [signInFailure, setSignInFailure] =
+    useState<{ outcome: typeof outcome; message: string } | null>(null)
+
+  /*
     RELATIVE LAST-SYNC TIME
 
     Purely a re-render tick so "Synced 5 minutes ago" keeps advancing
@@ -180,6 +194,49 @@ export default function SyncStatusIndicator() {
     synced: status === 'synced',
     labelShown: state.text !== null,
   })
+
+  /*
+    PANEL BUTTONS (the rules live in badgePanelActions.ts / badgePanelButton()).
+    Either tap closes the panel at once: "Sync now" turns the badge into
+    the spinner as the sync starts and the new outcome replaces this one
+    when it finishes. "Sign in again" reopens the panel only to show why a
+    sign-in did not complete.
+  */
+  function handlePanelSyncNow() {
+
+    setDetailOpenFor(null)
+
+    startSyncNow(status, { requestPull: requestCloudPullIfSignedIn })
+
+  }
+
+  async function handlePanelSignIn() {
+
+    const outcomeAtTap = outcome
+
+    setDetailOpenFor(null)
+    setSignInFailure(null)
+    setSigningIn(true)
+
+    const result = await signInAgain({
+      signIn,
+      reconcileAccount: reconcileSyncedAccount,
+      requestPull: requestCloudPullIfSignedIn,
+    })
+
+    setSigningIn(false)
+
+    if (result.kind === 'switched-account') {
+      window.location.reload()
+      return
+    }
+
+    if (result.kind === 'failed') {
+      setSignInFailure({ outcome: outcomeAtTap, message: result.message })
+      setDetailOpenFor(outcomeAtTap)
+    }
+
+  }
 
   function handleManualSync() {
 
@@ -352,22 +409,66 @@ export default function SyncStatusIndicator() {
 
     const copy = describeSyncOutcome(outcome)
 
+    const panelButton = badgePanelButton(outcome)
+
+    const failureMessage =
+      signInFailure && signInFailure.outcome === outcome
+        ? signInFailure.message
+        : null
+
+    /*
+      The panel sits NEXT TO the badge button (inside a shared holder), not
+      inside it: a button may not contain other buttons.
+    */
     return (
-      <button
-        type="button"
-        className="sync-status-badge sync-status-badge-clickable"
-        aria-expanded={detailOpen}
-        aria-label={`${copy.label}. ${detailOpen ? 'Hide' : 'Show'} details`}
-        onClick={() => setDetailOpenFor(detailOpen ? null : outcome)}
-      >
-        {badgeContent}
+      <div className="sync-status-badge-holder">
+
+        <button
+          type="button"
+          className="sync-status-badge sync-status-badge-clickable"
+          aria-expanded={detailOpen}
+          aria-label={`${copy.label}. ${detailOpen ? 'Hide' : 'Show'} details`}
+          onClick={() => setDetailOpenFor(detailOpen ? null : outcome)}
+        >
+          {badgeContent}
+        </button>
+
         {detailOpen && (
-          <span className="sync-status-detail" role="status">
+          <div className="sync-status-detail" role="status">
+
             <strong>{copy.label}</strong>
             <span>{copy.detail}</span>
-          </span>
+
+            {failureMessage && (
+              <span className="sync-status-detail-error">{failureMessage}</span>
+            )}
+
+            {panelButton === 'sync-now' && (
+              <button
+                type="button"
+                className="sync-status-detail-button"
+                onClick={handlePanelSyncNow}
+                disabled={!canTriggerManualSync(status)}
+              >
+                Sync now
+              </button>
+            )}
+
+            {panelButton === 'sign-in-again' && (
+              <button
+                type="button"
+                className="sync-status-detail-button"
+                onClick={handlePanelSignIn}
+                disabled={signingIn}
+              >
+                {signingIn ? 'Signing in…' : 'Sign in again'}
+              </button>
+            )}
+
+          </div>
         )}
-      </button>
+
+      </div>
     )
 
   }

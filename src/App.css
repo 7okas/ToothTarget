@@ -1256,6 +1256,33 @@ button:disabled:hover {
   Tap-to-open detail panel under the badge (offline / needs-input). A
   real, always-reachable line of text - never a hover tooltip.
 */
+/*
+  The badge button and its detail panel share a fixed holder so the panel
+  (which now contains real buttons) can sit beside the button instead of
+  inside it. The holder takes over the badge's fixed top-right position.
+*/
+.sync-status-badge-holder {
+  position: fixed;
+  top: var(--space-2);
+  right: var(--space-3);
+  z-index: 40;
+  pointer-events: none;
+}
+
+.sync-status-badge-holder > .sync-status-badge {
+  position: static;
+}
+
+.sync-status-detail-error {
+  color: var(--color-danger-strong);
+}
+
+.sync-status-detail-button {
+  min-height: 44px;
+  margin-top: var(--space-1);
+  font-size: 16px;
+}
+
 .sync-status-detail {
   position: absolute;
   top: calc(100% + var(--space-2));
@@ -1274,6 +1301,7 @@ button:disabled:hover {
   border-radius: var(--radius-md, 8px);
   padding: var(--space-2) var(--space-3);
   box-shadow: var(--shadow-sm);
+  pointer-events: auto;
 }
 
 .sync-status-relative-time {
