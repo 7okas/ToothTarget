@@ -3729,3 +3729,18 @@ button:disabled:hover {
 .update-banner button {
   flex-shrink: 0;
 }
+
+/* Read-only template view (Manage Procedure Templates, editing off) */
+.template-view-phases {
+  list-style: decimal inside;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.template-view-phases li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+}

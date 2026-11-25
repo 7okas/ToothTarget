@@ -28,13 +28,24 @@ import { calculateInterruptionSeconds } from './treatmentEvents'
 import { findExactDuplicateTemplate } from './templates'
 import { calculateAppointmentDurationEstimate } from './statistics'
 import {
-  BUILTIN_PROCEDURE_UPDATED_AT,
-  COMPOSITE_CLASS_PROCEDURE_SEEDS,
-  seedMissingBuiltinProcedures,
-} from './procedureSeeding'
+  BUILTIN_PROCEDURES,
+  BUILTIN_TEMPLATES,
+  DEFAULT_GENERAL_PHASES,
+  PROCEDURE_EDITING_ENABLED,
+  TEMPLATE_EDITING_ENABLED,
+  VISIBLE_SPECIALIZATION_IDS,
+  adoptBuiltinProcedures,
+  adoptBuiltinTemplates,
+  hasRetiredBuiltinTemplates,
+} from './builtinTemplates'
+import { phasesForCaseType } from './endoRctPhases'
+import TemplateReadOnlyView from './TemplateReadOnlyView'
+import {
+  browsableSpecializations,
+  listableTemplates,
+} from './templateView'
 import {
   TEMPLATE_TAXONOMY,
-  UNCLASSIFIED,
   classifyTemplate,
   findSpecialization,
   findProcedureOption,
@@ -74,10 +85,7 @@ import { getActiveAccount } from './auth'
 import { setTimerActive } from './appUpdate'
 import AppUpdateSettings from './AppUpdateSettings'
 import StorageSettings from './StorageSettings'
-import {
-  startTreatmentBlocker,
-  withBuiltinTemplates,
-} from './startTreatmentGuard'
+import { startTreatmentBlocker } from './startTreatmentGuard'
 
 export type TemplatePhase = {
   name: string
@@ -152,6 +160,13 @@ export type ProcedureTemplate = {
   name: string
   isCustom: boolean
   phases: TemplatePhase[]
+  /*
+    Optional second phase list, used instead of `phases` for Practice
+    patients (see phasesForCaseType() in endoRctPhases.ts). Only the
+    built-in RCT templates carry one; built-ins never enter the cloud
+    sync document, so this is not a sync schema field.
+  */
+  practicePhases?: TemplatePhase[]
   /*
     Where this template lives in the Specialization -> Procedure ->
     Type hierarchy (see templateTaxonomy.ts). Every template has one,
@@ -431,204 +446,11 @@ type TemplateDraft = {
 /*
   DEFAULT / BUILT-IN DATA
 
-  DEFAULT_GENERAL_PHASES is the original fixed phase set ToothTarget
-  shipped with. It now lives on as the "General Procedure" template,
-  used as a safe fallback whenever a procedure has no more specific
-  template.
+  The built-in templates and procedures (and the old, retired ones)
+  live in builtinTemplates.ts so they can be tested directly.
+  DEFAULT_GENERAL_PHASES is still used here as the safe fallback for
+  old saved records that have no phases.
 */
-
-const DEFAULT_GENERAL_PHASES: TemplatePhase[] = [
-  { name: 'Access', duration: 10 * 60 },
-  { name: 'Cleaning & Shaping', duration: 30 * 60 },
-  { name: 'Obturation', duration: 20 * 60 },
-]
-
-const DEFAULT_COMPOSITE_PHASES: TemplatePhase[] = [
-  { name: 'Preparation', duration: 10 * 60 },
-  { name: 'Restoration & Finishing', duration: 20 * 60 },
-]
-
-/*
-  Built-in templates are static and never edited through the normal
-  save path, so there's no real "last edited" moment to record - one
-  fixed timestamp is stamped onto all of them purely to satisfy the
-  shared ProcedureTemplate type. It's never read: built-ins are never
-  part of the cloud sync dataset (customTemplates only, see
-  cloudSync.ts) and are never included in a cloud backup either (see
-  createCloudBackup()'s isCustom filter).
-*/
-const BUILTIN_TEMPLATE_UPDATED_AT = '2024-01-01T00:00:00.000Z'
-
-const BUILTIN_TEMPLATES: ProcedureTemplate[] = (
-  [
-  {
-    id: 'general',
-    name: 'General Procedure',
-    isCustom: false,
-    phases: DEFAULT_GENERAL_PHASES.map(phase => ({ ...phase })),
-    ...UNCLASSIFIED,
-  },
-  {
-    id: 'rct-anterior',
-    name: 'Anterior Root Canal',
-    isCustom: false,
-    phases: [
-      { name: 'Access', duration: 8 * 60 },
-      { name: 'Working Length', duration: 5 * 60 },
-      { name: 'Glide Path', duration: 5 * 60 },
-      { name: 'Shaping', duration: 10 * 60 },
-      { name: 'Irrigation', duration: 5 * 60 },
-      { name: 'Obturation', duration: 8 * 60 },
-    ],
-    specializationId: 'endodontics',
-    procedureKey: 'rct',
-    typeId: 'anterior',
-  },
-  {
-    id: 'rct-premolar',
-    name: 'Premolar Root Canal',
-    isCustom: false,
-    phases: [
-      { name: 'Access', duration: 10 * 60 },
-      { name: 'Working Length', duration: 8 * 60 },
-      { name: 'Glide Path', duration: 5 * 60 },
-      { name: 'Shaping', duration: 12 * 60 },
-      { name: 'Irrigation', duration: 8 * 60 },
-      { name: 'Obturation', duration: 10 * 60 },
-    ],
-    specializationId: 'endodontics',
-    procedureKey: 'rct',
-    typeId: 'premolar',
-  },
-  {
-    id: 'rct-molar',
-    name: 'Molar Root Canal',
-    isCustom: false,
-    phases: [
-      { name: 'Access', duration: 10 * 60 },
-      { name: 'Working Length', duration: 10 * 60 },
-      { name: 'Glide Path', duration: 5 * 60 },
-      { name: 'Shaping', duration: 15 * 60 },
-      { name: 'Irrigation', duration: 10 * 60 },
-      { name: 'Obturation', duration: 10 * 60 },
-    ],
-    specializationId: 'endodontics',
-    procedureKey: 'rct',
-    typeId: 'molar',
-  },
-  {
-    id: 'cr-default',
-    name: 'Composite Restoration',
-    isCustom: false,
-    phases: DEFAULT_COMPOSITE_PHASES.map(phase => ({ ...phase })),
-    specializationId: 'restorative',
-    procedureKey: 'composite',
-    typeId: 'class-1',
-  },
-  {
-    id: 'cr-class-2',
-    name: 'Composite Restoration',
-    isCustom: false,
-    phases: DEFAULT_COMPOSITE_PHASES.map(phase => ({ ...phase })),
-    specializationId: 'restorative',
-    procedureKey: 'composite',
-    typeId: 'class-2',
-  },
-  {
-    id: 'cr-class-3',
-    name: 'Composite Restoration',
-    isCustom: false,
-    phases: DEFAULT_COMPOSITE_PHASES.map(phase => ({ ...phase })),
-    specializationId: 'restorative',
-    procedureKey: 'composite',
-    typeId: 'class-3',
-  },
-  {
-    id: 'cr-class-4',
-    name: 'Composite Restoration',
-    isCustom: false,
-    phases: DEFAULT_COMPOSITE_PHASES.map(phase => ({ ...phase })),
-    specializationId: 'restorative',
-    procedureKey: 'composite',
-    typeId: 'class-4',
-  },
-  {
-    id: 'cr-class-5',
-    name: 'Composite Restoration',
-    isCustom: false,
-    phases: DEFAULT_COMPOSITE_PHASES.map(phase => ({ ...phase })),
-    specializationId: 'restorative',
-    procedureKey: 'composite',
-    typeId: 'class-5',
-  },
-  {
-    id: 'sp-default',
-    name: 'Scaling & Polishing',
-    isCustom: false,
-    phases: [
-      { name: 'Scaling & Polishing', duration: 30 * 60 },
-    ],
-    ...UNCLASSIFIED,
-  },
-  {
-    id: 'ext-default',
-    name: 'Extraction',
-    isCustom: false,
-    phases: [
-      { name: 'Extraction', duration: 20 * 60 },
-    ],
-    ...UNCLASSIFIED,
-  },
-  {
-    id: 'irprep-default',
-    name: 'Indirect Restoration Preparation',
-    isCustom: false,
-    phases: [
-      { name: 'Preparation', duration: 30 * 60 },
-      { name: 'Impression', duration: 10 * 60 },
-    ],
-    ...UNCLASSIFIED,
-  },
-  ] satisfies Omit<ProcedureTemplate, 'updatedAt'>[]
-).map(template => ({ ...template, updatedAt: BUILTIN_TEMPLATE_UPDATED_AT }))
-
-/*
-  Phase 2 (Sync & Statistics Redesign): built-ins are no longer immune
-  to editing or archiving - confirmEditProcedure()/
-  setProcedureArchiveStatusInRegistry() (below) now rename/archive any
-  procedure, built-in or custom, since there's no longer a separate
-  "built-in procedure that cannot be touched". This fixed seed
-  timestamp is still stamped onto all of them purely to satisfy the
-  shared Procedure type at creation time - a genuine rename/archive
-  bumps updatedAt to the real edit time, same as any other procedure.
-
-  COMPOSITE_CLASS_PROCEDURE_SEEDS/seedMissingBuiltinProcedures() (used
-  just below and in the load effect's own migration pass) live in
-  procedureSeeding.ts instead of here, specifically so they're
-  directly unit-testable - see that file's own header comment for the
-  full reasoning (App.tsx itself can't be imported at runtime by any
-  test in this project).
-*/
-const BUILTIN_PROCEDURES: Procedure[] = (
-  [
-  {
-    id: 'rct',
-    name: 'Root Canal Treatment',
-    isCustom: false,
-    templateId: 'rct-molar',
-    regionTemplateIds: {
-      anterior: 'rct-anterior',
-      premolar: 'rct-premolar',
-      molar: 'rct-molar',
-    },
-  },
-  { id: 'cr', name: 'Composite Restoration', isCustom: false, templateId: 'cr-default' },
-  ...COMPOSITE_CLASS_PROCEDURE_SEEDS,
-  { id: 'sp', name: 'Scaling & Polishing', isCustom: false, templateId: 'sp-default' },
-  { id: 'ext', name: 'Extraction', isCustom: false, templateId: 'ext-default' },
-  { id: 'irprep', name: 'Indirect Restoration Preparation', isCustom: false, templateId: 'irprep-default' },
-  ] satisfies Omit<Procedure, 'updatedAt'>[]
-).map(procedure => ({ ...procedure, updatedAt: BUILTIN_PROCEDURE_UPDATED_AT }))
 
 /*
   One-tap presets for the Quick Notes and Interruption logs on the
@@ -3097,12 +2919,15 @@ function App() {
     | 'timer'
     | 'manageTemplates'
     | 'templateEditor'
+    | 'templateView'
     | 'treatmentSummary'
     | 'treatmentDetail'
     | 'statistics'
     | 'treatmentSearch'
     | 'settings'
   >('home')
+
+  const [viewTemplateId, setViewTemplateId] = useState<string | null>(null)
 
   const [patientSearch, setPatientSearch] = useState('')
 
@@ -3410,6 +3235,7 @@ const [conflictResolutionError, setConflictResolutionError] =
     let shapedIncompleteTreatments: ActiveTreatment[] = []
     let shapedProcedures: Procedure[] = BUILTIN_PROCEDURES
     let shapedTemplates: ProcedureTemplate[] = BUILTIN_TEMPLATES
+    let builtinTemplateMigrationChanged = false
 
     const saved =
       localStorage.getItem(
@@ -3687,10 +3513,12 @@ const [conflictResolutionError, setConflictResolutionError] =
         const parsed = JSON.parse(savedTemplateList)
 
         if (Array.isArray(parsed) && parsed.length > 0) {
-          shapedTemplates = withBuiltinTemplates(
-            parsed.map(classifyTemplate),
-            BUILTIN_TEMPLATES
-          )
+          const classified = parsed.map(classifyTemplate)
+
+          shapedTemplates = adoptBuiltinTemplates(classified)
+
+          builtinTemplateMigrationChanged =
+            hasRetiredBuiltinTemplates(classified)
         }
 
       } catch {
@@ -3909,13 +3737,14 @@ const [conflictResolutionError, setConflictResolutionError] =
     }
 
     /*
-      SEED MISSING BUILT-IN PROCEDURES (Phase 2, Step 7)
+      ADOPT THE CURRENT BUILT-IN PROCEDURES
 
-      Same placement/guard reasoning as the procedure timestamp
-      migration just above - runs before anything is committed to
-      state/localStorage, guarded on its own so a bug here can never
-      prevent the already-shaped procedures from still reaching the
-      app. See seedMissingBuiltinProcedures() above.
+      Replaces the old composite-class seeding (switched off: it would
+      have re-added Composite Class II-V on every load). Drops
+      built-in procedures that are no longer built in, puts back the
+      current ones, and re-routes a stored RCT procedure to the new
+      templates. Same placement/guard reasoning as the procedure
+      timestamp migration just above.
     */
 
     let builtinProcedureSeedMigrationChanged = false
@@ -3923,7 +3752,7 @@ const [conflictResolutionError, setConflictResolutionError] =
     try {
 
       const builtinProcedureSeedResult =
-        seedMissingBuiltinProcedures(shapedProcedures)
+        adoptBuiltinProcedures(shapedProcedures)
 
       shapedProcedures = builtinProcedureSeedResult.procedures
 
@@ -3932,7 +3761,7 @@ const [conflictResolutionError, setConflictResolutionError] =
     } catch {
 
       console.log(
-        'Could not seed missing built-in procedures.'
+        'Could not adopt the current built-in procedures.'
       )
 
     }
@@ -4256,7 +4085,8 @@ const [conflictResolutionError, setConflictResolutionError] =
       templateProcedureIdMigrationChanged ||
       templateTimestampMigrationChanged ||
       procedureTimestampMigrationChanged ||
-      builtinProcedureSeedMigrationChanged
+      builtinProcedureSeedMigrationChanged ||
+      builtinTemplateMigrationChanged
     ) {
 
       localStorage.setItem(
@@ -4515,10 +4345,7 @@ const [conflictResolutionError, setConflictResolutionError] =
 
           if (Array.isArray(parsed)) {
             setTemplates(
-              withBuiltinTemplates(
-                parsed.map(classifyTemplate),
-                BUILTIN_TEMPLATES
-              )
+              adoptBuiltinTemplates(parsed.map(classifyTemplate))
             )
           }
 
@@ -4588,12 +4415,13 @@ const [conflictResolutionError, setConflictResolutionError] =
       setSavedPatients(freshPatients)
       setSavedTreatments(readPersistedSavedTreatments())
       setTemplates(
-        withBuiltinTemplates(
-          readPersistedTemplates().map(classifyTemplate),
-          BUILTIN_TEMPLATES
+        adoptBuiltinTemplates(
+          readPersistedTemplates().map(classifyTemplate)
         )
       )
-      setProcedures(readPersistedProcedures())
+      setProcedures(
+        adoptBuiltinProcedures(readPersistedProcedures()).procedures
+      )
 
       setPatientNumberConflicts(
         reconcilePatientNumberConflicts(
@@ -5157,9 +4985,21 @@ async function openPatient(
 
     setStartTreatmentError(null)
 
+    /*
+      The patient's case type picks the phase list (Practice has no
+      Anesthesia). Looked up once here and reused for patientId below.
+      A missing caseType counts as Clinical.
+    */
+
+    const matchedPatient =
+      savedPatients.find(
+        patient => patient.name === cleanPatientName
+      )
+
     const treatmentPhases =
-      template.phases.map(
-        phase => ({ ...phase })
+      phasesForCaseType(
+        template,
+        getPatientCaseType(matchedPatient)
       )
 
     /*
@@ -5171,11 +5011,6 @@ async function openPatient(
       for a name somehow missing from savedPatients - it's never
       persisted to the patient registry itself.
     */
-
-    const matchedPatient =
-      savedPatients.find(
-        patient => patient.name === cleanPatientName
-      )
 
     const newTreatment:
       ActiveTreatment = {
@@ -7073,6 +6908,14 @@ async function openPatient(
 
   }
 
+  function openTemplateView(templateId: string) {
+
+    setViewTemplateId(templateId)
+
+    setScreen('templateView')
+
+  }
+
   function openTemplateEditor(
     templateId: string
   ) {
@@ -8810,6 +8653,8 @@ const patientTreatments =
                     </span>
                   </button>
 
+                  {PROCEDURE_EDITING_ENABLED && (
+
                   <div className="template-row-actions">
 
                     <button
@@ -8836,12 +8681,18 @@ const patientTreatments =
 
                   </div>
 
+                  )}
+
                 </div>
 
               )
             )}
 
           </div>
+
+          {PROCEDURE_EDITING_ENABLED && (
+
+          <>
 
           <div className="patient-list">
 
@@ -8929,6 +8780,10 @@ const patientTreatments =
               )}
 
             </div>
+
+          )}
+
+          </>
 
           )}
 
@@ -10147,11 +10002,14 @@ const patientTreatments =
 
     const bucketTemplates =
       browseSpecialization && browseProcedure && browseType
-        ? templates.filter(
-            template =>
-              template.specializationId === browseSpecialization.id &&
-              template.procedureKey === browseProcedure.key &&
-              template.typeId === browseType.id
+        ? listableTemplates(
+            templates,
+            {
+              specializationId: browseSpecialization.id,
+              procedureKey: browseProcedure.key,
+              typeId: browseType.id,
+            },
+            TEMPLATE_EDITING_ENABLED
           )
         : []
 
@@ -10188,7 +10046,10 @@ const patientTreatments =
 
             <div className="patient-list">
 
-              {TEMPLATE_TAXONOMY.map(specialization => (
+              {(TEMPLATE_EDITING_ENABLED
+                ? TEMPLATE_TAXONOMY
+                : browsableSpecializations(VISIBLE_SPECIALIZATION_IDS)
+              ).map(specialization => (
 
                 <button
                   key={specialization.id}
@@ -10284,7 +10145,9 @@ const patientTreatments =
                         type="button"
                         className="template-row-main"
                         onClick={() =>
-                          openTemplateEditor(template.id)
+                          TEMPLATE_EDITING_ENABLED
+                            ? openTemplateEditor(template.id)
+                            : openTemplateView(template.id)
                         }
                       >
                         <span className="template-row-title">
@@ -10304,6 +10167,8 @@ const patientTreatments =
                           {totalMinutes} min
                         </small>
                       </button>
+
+                      {TEMPLATE_EDITING_ENABLED && (
 
                       <div className="template-row-actions">
 
@@ -10353,6 +10218,9 @@ const patientTreatments =
 
                       </div>
 
+
+                      )}
+
                     </div>
 
                   )
@@ -10361,6 +10229,8 @@ const patientTreatments =
 
               </div>
 
+
+              {TEMPLATE_EDITING_ENABLED && (
 
               <div className="manage-templates-actions">
 
@@ -10379,6 +10249,9 @@ const patientTreatments =
                 </button>
 
               </div>
+
+
+              )}
 
             </>
 
@@ -10439,6 +10312,34 @@ const patientTreatments =
     TEMPLATE EDITOR
     =========================================
   */
+
+  if (screen === 'templateView') {
+
+    const viewed = templates.find(template => template.id === viewTemplateId)
+
+    if (viewed) {
+
+      const specialization = findSpecialization(viewed.specializationId)
+      const procedure = findProcedureOption(
+        viewed.specializationId,
+        viewed.procedureKey
+      )
+
+      return (
+
+        <TemplateReadOnlyView
+          template={viewed}
+          breadcrumb={[specialization?.name, procedure?.name]
+            .filter(Boolean)
+            .join(' · ')}
+          onBack={() => setScreen('manageTemplates')}
+        />
+
+      )
+
+    }
+
+  }
 
   if (screen === 'templateEditor' && templateDraft) {
 
