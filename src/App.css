@@ -3744,3 +3744,39 @@ button:disabled:hover {
   padding: 8px 0;
   border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.25));
 }
+
+/* Erase everything (temporary red section in Settings) */
+.erase-section {
+  margin-top: var(--space-7);
+  padding: var(--space-4);
+  border: 2px solid var(--color-danger);
+  border-radius: 12px;
+}
+
+.erase-title {
+  margin-top: 0;
+  color: var(--color-danger);
+}
+
+.erase-label {
+  display: block;
+  margin-bottom: var(--space-3);
+}
+
+.erase-label input {
+  display: block;
+  margin-top: var(--space-2);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.erase-error {
+  color: var(--color-danger);
+  font-weight: var(--weight-bold);
+}
+
+.erase-plan ul {
+  margin: var(--space-2) 0 var(--space-4);
+  padding-left: 20px;
+  word-break: break-all;
+}
