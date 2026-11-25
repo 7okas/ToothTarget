@@ -11,12 +11,12 @@ import {
   subscribeCloudSyncStatus,
   getLastSyncOutcome,
   subscribeLastSyncOutcome,
-  requestCloudSync,
   requestCloudPullIfSignedIn,
 } from './cloudSyncScheduler'
 import { reconcileSyncedAccount, syncCloudNow } from './cloudSyncEngine'
 import { signOutWithBestEffortSync } from './cloudSyncSignOut'
 import { canTriggerManualSync } from './syncStatusIndicatorState'
+import { startSyncNow } from './badgePanelActions'
 import { openSafetyCopiesScreen } from './syncResolutionStore'
 
 /*
@@ -57,7 +57,7 @@ const CLOUD_SYNC_STATUS_LABEL: Record<
   Phase 8 - "Sync Now" replaces the old separate "Backup to Cloud"/
   "Load from Cloud" one-way snapshot actions with a single button that
   triggers the SAME automatic two-way sync as every other trigger in
-  the app (requestCloudSync(), guarded by the same
+  the app (the pull-first startSyncNow(), guarded by the same
   canTriggerManualSync() SyncStatusIndicator.tsx's own manual-sync
   affordance uses) - not a new sync mechanism. The underlying one-way
   backup/restore functions (cloudBackup.ts, cloudStorage.ts's
@@ -216,11 +216,11 @@ export default function MicrosoftAccountSection() {
   */
   function handleSyncNow() {
 
-    if (!canTriggerManualSync(cloudSyncStatus)) {
-      return
-    }
-
-    requestCloudSync()
+    /*
+      Pull-first, same as the startup sync and the badge - see
+      badgePanelActions.ts. startSyncNow() applies the guard above.
+    */
+    startSyncNow(cloudSyncStatus, { requestPull: requestCloudPullIfSignedIn })
 
   }
 

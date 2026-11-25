@@ -7,7 +7,6 @@ import {
   subscribeCloudSyncStatus,
   getLastSyncOutcome,
   subscribeLastSyncOutcome,
-  requestCloudSync,
   requestCloudPullIfSignedIn,
   type CloudSyncStatus,
 } from './cloudSyncScheduler'
@@ -43,7 +42,7 @@ import {
   active account) - the one exception (Phase 8) is the manual
   "tap the badge to sync now" affordance below (the whole badge is
   the tap target, not just the checkmark - easier to hit on a touch
-  device), which calls requestCloudSync() itself rather than defining
+  device), which starts the pull-first manual sync itself rather than defining
   any sync logic of its own; every other branch here still only ever
   renders what already exists elsewhere.
 
@@ -240,11 +239,11 @@ export default function SyncStatusIndicator() {
 
   function handleManualSync() {
 
-    if (!canTriggerManualSync(status)) {
-      return
-    }
-
-    requestCloudSync()
+    /*
+      The pull-first route, same as the panel's "Sync now" - see
+      badgePanelActions.ts for why this is never requestCloudSync().
+    */
+    startSyncNow(status, { requestPull: requestCloudPullIfSignedIn })
 
   }
 
