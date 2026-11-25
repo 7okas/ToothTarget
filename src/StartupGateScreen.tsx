@@ -236,15 +236,21 @@ export default function StartupGateScreen() {
 
       <div className="startup-gate-card">
 
+        {/*
+          The same logo on every view (sign-in, syncing, success, diverged,
+          error), rendered once above them so it never moves or reloads when
+          the view changes - the status icon of each view stays below it.
+        */}
+
+        <img
+          src={logo}
+          alt="ToothTarget"
+          className="startup-gate-logo"
+        />
+
         {view.kind === 'sign-in-prompt' && (
 
           <>
-
-            <img
-              src={logo}
-              alt="ToothTarget"
-              className="startup-gate-logo"
-            />
 
             <p>
               Sign in with Microsoft to keep your data backed up to
