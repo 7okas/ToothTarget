@@ -71,6 +71,10 @@ import {
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
+import {
+  startTreatmentBlocker,
+  withBuiltinTemplates,
+} from './startTreatmentGuard'
 
 export type TemplatePhase = {
   name: string
@@ -753,7 +757,7 @@ function resolveTemplate(
   procedure: Procedure,
   toothId: string,
   templates: ProcedureTemplate[]
-): ProcedureTemplate {
+): ProcedureTemplate | undefined {
 
   const tooth = getToothById(toothId)
 
@@ -3105,6 +3109,8 @@ function App() {
 
   const [selectedToothId, setSelectedToothId] = useState<string | null>(null)
 
+  const [startTreatmentError, setStartTreatmentError] = useState<string | null>(null)
+
   /*
     CHAIR TIME (Phase 16)
 
@@ -3678,7 +3684,10 @@ const [conflictResolutionError, setConflictResolutionError] =
         const parsed = JSON.parse(savedTemplateList)
 
         if (Array.isArray(parsed) && parsed.length > 0) {
-          shapedTemplates = parsed.map(classifyTemplate)
+          shapedTemplates = withBuiltinTemplates(
+            parsed.map(classifyTemplate),
+            BUILTIN_TEMPLATES
+          )
         }
 
       } catch {
@@ -4490,7 +4499,12 @@ const [conflictResolutionError, setConflictResolutionError] =
             event.newValue ? JSON.parse(event.newValue) : []
 
           if (Array.isArray(parsed)) {
-            setTemplates(parsed.map(classifyTemplate))
+            setTemplates(
+              withBuiltinTemplates(
+                parsed.map(classifyTemplate),
+                BUILTIN_TEMPLATES
+              )
+            )
           }
 
         } catch {
@@ -4558,7 +4572,12 @@ const [conflictResolutionError, setConflictResolutionError] =
 
       setSavedPatients(freshPatients)
       setSavedTreatments(readPersistedSavedTreatments())
-      setTemplates(readPersistedTemplates().map(classifyTemplate))
+      setTemplates(
+        withBuiltinTemplates(
+          readPersistedTemplates().map(classifyTemplate),
+          BUILTIN_TEMPLATES
+        )
+      )
       setProcedures(readPersistedProcedures())
 
       setPatientNumberConflicts(
@@ -4833,6 +4852,8 @@ async function openPatient(
 
     setSelectedToothId(null)
 
+    setStartTreatmentError(null)
+
     setShowAddProcedure(false)
 
     setNewProcedureName('')
@@ -5088,24 +5109,38 @@ async function openPatient(
     const cleanPatientName =
       selectedPatient.trim()
 
+    const template =
+      selectedProcedure && selectedToothId
+        ? resolveTemplate(
+            selectedProcedure,
+            selectedToothId,
+            templates
+          )
+        : undefined
+
+    const blocker =
+      startTreatmentBlocker({
+        patientName: cleanPatientName,
+        hasProcedure: selectedProcedure !== null,
+        toothId: selectedToothId,
+        hasUsableTemplate:
+          template !== undefined && template.phases.length > 0,
+      })
 
     if (
-      cleanPatientName === '' ||
+      blocker !== null ||
+      !template ||
       !selectedToothId ||
       !selectedProcedure
     ) {
+
+      setStartTreatmentError(blocker)
 
       return
 
     }
 
-
-    const template =
-      resolveTemplate(
-        selectedProcedure,
-        selectedToothId,
-        templates
-      )
+    setStartTreatmentError(null)
 
     const treatmentPhases =
       template.phases.map(
@@ -9068,7 +9103,10 @@ const patientTreatments =
 
         <ToothChart
           selectedToothId={selectedToothId}
-          onSelect={setSelectedToothId}
+          onSelect={toothId => {
+            setSelectedToothId(toothId)
+            setStartTreatmentError(null)
+          }}
         />
 
 
@@ -9111,14 +9149,17 @@ const patientTreatments =
               : 'Mark Patient In Chair (optional)'}
           </button>
 
+          {startTreatmentError && (
+            <p className="settings-error-message" role="alert">
+              {startTreatmentError}
+            </p>
+          )}
+
           <button
             type="button"
             className="start-treatment-button"
             onClick={
               startTreatment
-            }
-            disabled={
-              !selectedToothId
             }
           >
             Start Treatment
