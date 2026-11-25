@@ -73,6 +73,7 @@ import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
 import { setTimerActive } from './appUpdate'
 import AppUpdateSettings from './AppUpdateSettings'
+import StorageSettings from './StorageSettings'
 import {
   startTreatmentBlocker,
   withBuiltinTemplates,
@@ -11227,6 +11228,8 @@ const patientTreatments =
           <MicrosoftAccountSection />
 
           <AppUpdateSettings />
+
+          <StorageSettings />
 
           <h2 className="settings-section-title">
             Data Export &amp; Backup

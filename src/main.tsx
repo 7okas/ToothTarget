@@ -10,6 +10,7 @@ import SafetyCopiesScreen from './SafetyCopiesScreen.tsx'
 import { initializeMsal } from './auth.ts'
 import UpdateBanner from './UpdateBanner.tsx'
 import { startAppUpdates } from './appUpdate.ts'
+import { ensurePersistenceOnLaunch } from './persistentStorage.ts'
 
 /*
   MSAL must finish initializing (and process any redirect response)
@@ -43,3 +44,9 @@ initializeMsal().finally(() => {
   see appUpdate.ts and public/sw.js.
 */
 startAppUpdates()
+
+/*
+  Quietly asks the browser to keep this site's data (see
+  persistentStorage.ts). Never shows anything and never reads app data.
+*/
+void ensurePersistenceOnLaunch()
