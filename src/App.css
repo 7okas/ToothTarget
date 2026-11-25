@@ -3658,3 +3658,41 @@ button:disabled:hover {
   flex-direction: column;
   gap: var(--space-3);
 }
+
+
+/* ===========================
+   "Update available" banner (see UpdateBanner.tsx)
+   Fixed to the bottom edge, above page content but below modals
+   (.modal-overlay is 100). Never acts on its own - the button is the
+   only trigger.
+=========================== */
+
+.update-banner {
+  position: fixed;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  max-width: 480px;
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-info-border);
+  border-radius: 12px;
+  color: var(--color-info-strong);
+  font-size: 0.95rem;
+}
+
+.update-banner-error {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-strong);
+}
+
+.update-banner button {
+  flex-shrink: 0;
+}

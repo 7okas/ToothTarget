@@ -71,6 +71,8 @@ import {
 import { attachOnlineRetryListener } from './cloudSyncOnlineRetry'
 import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
+import { setTimerActive } from './appUpdate'
+import AppUpdateSettings from './AppUpdateSettings'
 import {
   startTreatmentBlocker,
   withBuiltinTemplates,
@@ -4386,6 +4388,18 @@ const [conflictResolutionError, setConflictResolutionError] =
   /*
     SAVE ACTIVE TREATMENT AUTOMATICALLY
   */
+
+  /*
+    Tells the "Update available" banner when the timer screen has an
+    active treatment, so it stays out of the way (and never offers a
+    reload) while one is running.
+  */
+  useEffect(() => {
+
+    setTimerActive(screen === 'timer' && activeTreatment !== null)
+
+  }, [screen, activeTreatment])
+
 
   useEffect(() => {
 
@@ -11211,6 +11225,8 @@ const patientTreatments =
         <div className="procedure-page">
 
           <MicrosoftAccountSection />
+
+          <AppUpdateSettings />
 
           <h2 className="settings-section-title">
             Data Export &amp; Backup

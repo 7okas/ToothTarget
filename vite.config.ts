@@ -1,23 +1,21 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
-import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { stampServiceWorker } from './scripts/swBuild.ts'
 
 /*
-  sw.js (in public/) ships with a __BUILD_VERSION__ placeholder instead of
-  a real version, because public/ files are copied to dist/ verbatim -
-  Vite doesn't process them. This plugin swaps in a real timestamp after
-  the build finishes, so the service worker's cache name changes on every
-  deploy without anyone having to remember to bump it by hand.
+  public/sw.js ships with __BUILD_ID__ / __PRECACHE_JSON__ placeholders
+  because public/ files are copied to dist/ verbatim - Vite doesn't
+  process them. Once the bundle is written, stampServiceWorker() (see
+  scripts/swBuild.ts) fills them in with this build's id and the list
+  of files that make up the build, and writes dist/version.json.
 */
 function stampServiceWorkerVersion(): Plugin {
   return {
     name: 'stamp-service-worker-version',
     apply: 'build',
     closeBundle() {
-      const swPath = resolve(process.cwd(), 'dist/sw.js')
-      const contents = readFileSync(swPath, 'utf-8')
-      writeFileSync(swPath, contents.replaceAll('__BUILD_VERSION__', String(Date.now())))
+      stampServiceWorker(resolve(process.cwd(), 'dist'))
     },
   }
 }

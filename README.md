@@ -48,6 +48,80 @@ Currently, two official plugins are available:
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
 - [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
 
+## Offline use and updates (service worker)
+
+ToothTarget installs a small hand-written service worker (`public/sw.js`)
+that keeps a copy of the whole app on the device, so it opens with no
+network. The page side is `src/appUpdate.ts`; the build step that stamps
+each build is `scripts/swBuild.ts`.
+
+- **One set per build.** Every file of a build is saved together under one
+  name (`toothtarget-<build id>`). If any file fails to download, the new
+  version is not installed and the old one keeps running, so the app never
+  mixes files from two builds.
+- **Never touched by the worker:** other sites (Microsoft login, Graph /
+  OneDrive), anything that is not a plain GET, `src/redirect.html` and its
+  script, any address carrying sign-in parameters (`code=`, `state=`,
+  `error=`, `id_token=` ...), and `sw.js` itself.
+- **Updates never reload the page by themselves.** A new version installs in
+  the background and waits. An "Update available - reload" banner appears;
+  it is hidden while the timer screen has an active treatment and shows up
+  once you leave it. Nothing happens until you press **Reload**.
+- **Settings > App Version** shows the version (`date · build id`), has
+  **Check for updates** and **Reset app cache**.
+- Patients, treatments, templates and sign-in live in the browser's
+  localStorage. The service worker, the update banner and Reset app cache
+  never read or write it.
+
+### The first deploy of this worker (what to expect)
+
+The worker that is live today (network-first for the page, calls
+`skipWaiting`) is replaced by this one the next time a device opens the app.
+Be aware this is **not** instant and **not** silent:
+
+1. The browser fetches the new `sw.js` and installs it in the background.
+   The new worker does NOT call `skipWaiting`, so it waits.
+2. The app keeps working exactly as before until the new worker takes over.
+   It takes over when you press **Reload** on the banner, or after the app
+   has been fully closed and reopened (on an iPad: swipe it away, then open
+   it again).
+3. The page opened after the deploy is already the new build (the old worker
+   loads the page from the network), so it contains the banner code and will
+   show "Update available - reload" for that one waiting worker. Pressing
+   Reload then reloads once and the offline copy is in place.
+4. If you never press it, nothing breaks: the old behaviour continues until
+   the next full close and reopen.
+
+This is expected behaviour from reading the code and the headless check
+below; it has not been observed on a real iPad yet.
+
+### Service worker kill switch (if a bad worker ever ships)
+
+Pick the first one that works:
+
+1. **In the app:** Settings > App Version > **Reset app cache**. It removes
+   the worker and the service worker's own caches only, then reloads once.
+   Your data is not touched.
+2. **If the app will not even load:** replace `public/sw.js` with the
+   contents of `public/sw.kill.js`, then deploy (merge to `main`). Browsers
+   re-fetch `sw.js` on every visit, so each device removes its worker and
+   clears the `toothtarget-*` caches the next time it opens the app. After
+   that, restore the real `sw.js` in a later deploy.
+3. **Last resort on a device:** iPad Settings > Safari > Advanced > Website
+   Data > remove the site. This also clears that site's localStorage, so
+   export a backup first if the data is not synced.
+
+### Checking it locally
+
+```
+npm run build
+npm run preview -- --base /ToothTarget/
+```
+
+Open `http://localhost:4173/ToothTarget/` (the `--base` flag matters: without
+it the preview serves from `/` and does not match the real deployment).
+`npm run dev` does not register the worker.
+
 ## React Compiler
 
 The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).

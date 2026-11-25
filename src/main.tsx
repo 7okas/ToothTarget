@@ -8,6 +8,8 @@ import CloudCorruptionRecoveryDialog from './CloudCorruptionRecoveryDialog.tsx'
 import SyncResolutionScreen from './SyncResolutionScreen.tsx'
 import SafetyCopiesScreen from './SafetyCopiesScreen.tsx'
 import { initializeMsal } from './auth.ts'
+import UpdateBanner from './UpdateBanner.tsx'
+import { startAppUpdates } from './appUpdate.ts'
 
 /*
   MSAL must finish initializing (and process any redirect response)
@@ -24,6 +26,7 @@ initializeMsal().finally(() => {
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
+      <UpdateBanner />
       <SyncStatusIndicator />
       <App />
       <StartupGateScreen />
@@ -36,12 +39,7 @@ initializeMsal().finally(() => {
 })
 
 /*
-  Registered after load so it never delays first render. Scoped via
-  BASE_URL because the production build is served from /ToothTarget/,
-  not the site root - registering "/sw.js" there would 404.
+  Service worker registration and update tracking (production only) -
+  see appUpdate.ts and public/sw.js.
 */
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`)
-  })
-}
+startAppUpdates()
