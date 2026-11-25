@@ -84,7 +84,6 @@ import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
 import { setTimerActive } from './appUpdate'
 import AppUpdateSettings from './AppUpdateSettings'
-import EraseEverythingSection from './EraseEverythingSection'
 import StorageSettings from './StorageSettings'
 import { startTreatmentBlocker } from './startTreatmentGuard'
 
@@ -11184,8 +11183,6 @@ const patientTreatments =
               {importError}
             </p>
           )}
-
-          <EraseEverythingSection />
 
         </div>
 
