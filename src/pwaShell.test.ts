@@ -140,9 +140,10 @@ describe('index.html - iOS web app tags', () => {
     expect(indexHtml).toContain('<meta name="theme-color" content="#f1f2f5" />')
   })
 
-  it('leaves the viewport as it was (no viewport-fit, so no safe-area work is needed)', () => {
-    expect(indexHtml).toContain('<meta name="viewport" content="width=device-width, initial-scale=1.0" />')
-    expect(indexHtml).not.toContain('viewport-fit')
+  it('uses viewport-fit=cover so the safe-area insets are available to the CSS', () => {
+    expect(indexHtml).toContain(
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />',
+    )
   })
 
   it('keeps the existing favicon links', () => {
