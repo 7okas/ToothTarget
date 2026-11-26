@@ -30,9 +30,9 @@ export const CLINICAL_RCT_PHASES: readonly TemplatePhase[] = [
   { name: ANESTHESIA_PHASE_NAME, duration: minutes(5) },
   { name: 'Access', duration: minutes(8) },
   { name: 'Glide Path', duration: minutes(5) },
-  { name: 'Working Length Determination', duration: minutes(7) },
+  { name: 'Working Length', duration: minutes(7) },
   { name: 'Shaping', duration: minutes(10) },
-  { name: 'Master Cone X-ray', duration: minutes(3) },
+  { name: 'MC X-ray', duration: minutes(3) },
   { name: 'Irrigant Activation', duration: minutes(5) },
   { name: 'Obturation', duration: minutes(7) },
 ]

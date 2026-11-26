@@ -66,9 +66,9 @@ describe('RCT phase lists', () => {
       'Anesthesia',
       'Access',
       'Glide Path',
-      'Working Length Determination',
+      'Working Length',
       'Shaping',
-      'Master Cone X-ray',
+      'MC X-ray',
       'Irrigant Activation',
       'Obturation',
     ])

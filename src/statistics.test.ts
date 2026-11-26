@@ -41,7 +41,7 @@ import {
 */
 
 const ACCESS = 'Access'
-const WORKING_LENGTH = 'Working Length Determination'
+const WORKING_LENGTH = 'Working Length'
 const CLEANING_SHAPING = 'Cleaning and Shaping'
 const OBTURATION = 'Obturation'
 const RESTORATION = 'Restoration'
