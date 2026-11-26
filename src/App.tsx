@@ -11154,37 +11154,53 @@ const patientTreatments =
             Data Export &amp; Backup
           </h2>
 
-          <p className="settings-section-description">
-            Export a full backup of your patients, treatments,
-            templates, and procedures, or export completed
-            treatments as a spreadsheet. Backups are saved to a file
-            on this device only - nothing is ever sent over the
-            network.
-          </p>
+          <div className="options-menu-list settings-actions settings-actions-stacked">
 
-          <div className="options-menu-list settings-actions">
+            <div className="settings-action-item">
 
-            <button
-              type="button"
-              onClick={exportBackup}
-            >
-              Export Backup (JSON)
-            </button>
+              <button
+                type="button"
+                onClick={exportBackup}
+              >
+                Export Backup (JSON)
+              </button>
 
-            <button
-              type="button"
-              onClick={exportCsv}
-              disabled={savedTreatments.length === 0}
-            >
-              Export Completed Treatments (CSV)
-            </button>
+              <p className="settings-action-hint">
+                Saves all patients and treatments to a file on this device.
+              </p>
 
-            <button
-              type="button"
-              onClick={triggerImportFilePicker}
-            >
-              Import Backup
-            </button>
+            </div>
+
+            <div className="settings-action-item">
+
+              <button
+                type="button"
+                onClick={exportCsv}
+                disabled={savedTreatments.length === 0}
+              >
+                Export Completed Treatments (CSV)
+              </button>
+
+              <p className="settings-action-hint">
+                Saves finished treatments as a spreadsheet file.
+              </p>
+
+            </div>
+
+            <div className="settings-action-item">
+
+              <button
+                type="button"
+                onClick={triggerImportFilePicker}
+              >
+                Import Backup
+              </button>
+
+              <p className="settings-action-hint">
+                Restores patients and treatments from a backup file.
+              </p>
+
+            </div>
 
           </div>
 

@@ -3056,6 +3056,25 @@ button:disabled:hover {
   margin-top: var(--space-3);
 }
 
+.settings-actions-stacked {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: var(--space-4);
+}
+
+.settings-action-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-action-hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
 .hidden-file-input {
   display: none;
 }
