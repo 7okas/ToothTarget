@@ -67,8 +67,9 @@ each build is `scripts/swBuild.ts`.
   the background and waits. An "Update available - reload" banner appears;
   it is hidden while the timer screen has an active treatment and shows up
   once you leave it. Nothing happens until you press **Reload**.
-- **Settings > App Version** shows the version (`date · build id`), has
-  **Check for updates** and **Reset app cache**.
+- **Settings > App Version** shows the version (`date · build id`), and
+  the update button when a new version is waiting. The worker also
+  re-checks for a new version whenever the app returns to the foreground.
 - Patients, treatments, templates and sign-in live in the browser's
   localStorage. The service worker, the update banner and Reset app cache
   never read or write it.

@@ -1,20 +1,11 @@
 import { useState, useSyncExternalStore } from 'react'
 import {
   applyUpdate,
-  checkForUpdates,
   getAppUpdateState,
   resetAppCache,
   subscribeAppUpdate,
 } from './appUpdate'
 import { UPDATE_TEXT } from './appUpdateRules'
-
-const CHECK_TEXT = {
-  idle: '',
-  checking: 'Checking...',
-  'up-to-date': 'You have the latest version.',
-  'update-ready': 'A new version is ready.',
-  error: 'Could not check for updates (offline, or not installed yet).',
-} as const
 
 export default function AppUpdateSettings() {
 
@@ -36,14 +27,6 @@ export default function AppUpdateSettings() {
 
       <div className="options-menu-list settings-actions">
 
-        <button
-          type="button"
-          onClick={checkForUpdates}
-          disabled={state.checkStatus === 'checking'}
-        >
-          Check for updates
-        </button>
-
         {state.updateReady && (
           <button type="button" onClick={applyUpdate}>
             {UPDATE_TEXT}
@@ -58,12 +41,6 @@ export default function AppUpdateSettings() {
         </button>
 
       </div>
-
-      {state.checkStatus !== 'idle' && (
-        <p className="settings-section-description" role="status">
-          {CHECK_TEXT[state.checkStatus]}
-        </p>
-      )}
 
       {confirmingReset && (
 

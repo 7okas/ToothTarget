@@ -11,18 +11,10 @@ import { isChunkLoadFailure } from './appUpdateRules'
   Nothing in here reads or writes localStorage.
 */
 
-export type UpdateCheckStatus =
-  | 'idle'
-  | 'checking'
-  | 'up-to-date'
-  | 'update-ready'
-  | 'error'
-
 export type AppUpdateState = {
   updateReady: boolean
   timerActive: boolean
   loadFailed: boolean
-  checkStatus: UpdateCheckStatus
   versionLabel: string | null
 }
 
@@ -30,7 +22,6 @@ let state: AppUpdateState = {
   updateReady: false,
   timerActive: false,
   loadFailed: false,
-  checkStatus: 'idle',
   versionLabel: null,
 }
 
@@ -178,53 +169,6 @@ export function startAppUpdates() {
     }
 
   })
-
-}
-
-export async function checkForUpdates(): Promise<void> {
-
-  if (!registration) {
-    setState({ checkStatus: 'error' })
-    return
-  }
-
-  setState({ checkStatus: 'checking' })
-
-  try {
-
-    await registration.update()
-
-    const installing = registration.installing
-
-    if (installing) {
-
-      await new Promise<void>(resolve => {
-
-        const timeout = window.setTimeout(resolve, 20000)
-
-        installing.addEventListener('statechange', () => {
-
-          if (installing.state === 'installed' || installing.state === 'redundant') {
-            window.clearTimeout(timeout)
-            resolve()
-          }
-
-        })
-
-      })
-
-    }
-
-    setState({
-      checkStatus: registration.waiting ? 'update-ready' : 'up-to-date',
-      updateReady: Boolean(registration.waiting) || state.updateReady,
-    })
-
-  } catch {
-
-    setState({ checkStatus: 'error' })
-
-  }
 
 }
 
