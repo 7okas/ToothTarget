@@ -11145,7 +11145,7 @@ const patientTreatments =
 
           <MicrosoftAccountSection />
 
-          <h2 className="settings-section-title">
+          <h2 className="settings-section-title settings-section-divided">
             Data Export &amp; Backup
           </h2>
 

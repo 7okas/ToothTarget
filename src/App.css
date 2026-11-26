@@ -3091,6 +3091,13 @@ button:disabled:hover {
   color: var(--color-ink);
 }
 
+.settings-section-divided {
+  /* A thin line and extra space, so it reads as a separate group from the block above. */
+  margin-top: var(--space-8);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border);
+}
+
 .settings-section-title:first-child {
   margin-top: 0;
 }
