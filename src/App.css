@@ -3074,6 +3074,14 @@ button:disabled:hover {
   margin-top: var(--space-3);
 }
 
+.settings-version-footer {
+  margin: var(--space-6) 0 0 0;
+  text-align: right;
+  font-size: var(--text-sm);
+  color: var(--color-text-faint);
+  opacity: 0.8;
+}
+
 .settings-actions-stacked {
   flex-direction: column;
   flex-wrap: nowrap;
