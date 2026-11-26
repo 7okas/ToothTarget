@@ -71,8 +71,8 @@ each build is `scripts/swBuild.ts`.
   the update button when a new version is waiting. The worker also
   re-checks for a new version whenever the app returns to the foreground.
 - Patients, treatments, templates and sign-in live in the browser's
-  localStorage. The service worker, the update banner and Reset app cache
-  never read or write it.
+  localStorage. The service worker and the update banner never read or
+  write it.
 
 ### The first deploy of this worker (what to expect)
 
@@ -98,17 +98,15 @@ below; it has not been observed on a real iPad yet.
 
 ### Service worker kill switch (if a bad worker ever ships)
 
-Pick the first one that works:
+Pick the first one that works (the in-app Reset app cache button was
+removed from Settings; this is the remaining route):
 
-1. **In the app:** Settings > App Version > **Reset app cache**. It removes
-   the worker and the service worker's own caches only, then reloads once.
-   Your data is not touched.
-2. **If the app will not even load:** replace `public/sw.js` with the
+1. **If the app will not even load, or is stuck on a bad worker:** replace `public/sw.js` with the
    contents of `public/sw.kill.js`, then deploy (merge to `main`). Browsers
    re-fetch `sw.js` on every visit, so each device removes its worker and
    clears the `toothtarget-*` caches the next time it opens the app. After
    that, restore the real `sw.js` in a later deploy.
-3. **Last resort on a device:** iPad Settings > Safari > Advanced > Website
+2. **Last resort on a device:** iPad Settings > Safari > Advanced > Website
    Data > remove the site. This also clears that site's localStorage, so
    export a backup first if the data is not synced.
 

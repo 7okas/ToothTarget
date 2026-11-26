@@ -5,8 +5,8 @@ import { isChunkLoadFailure } from './appUpdateRules'
 
   A tiny external store the banner (UpdateBanner.tsx) and the Settings
   section (AppUpdateSettings.tsx) both read. Nothing in here ever
-  reloads the page by itself: the only reload paths are applyUpdate()
-  and resetAppCache(), and both are only called from a button press.
+  reloads the page by itself: the only reload path is applyUpdate(),
+  which is only called from a button press.
 
   Nothing in here reads or writes localStorage.
 */
@@ -189,37 +189,5 @@ export function applyUpdate() {
   reloadRequested = true
 
   waiting.postMessage({ type: 'SKIP_WAITING' })
-
-}
-
-/*
-  Recovery button: unregisters the service worker and deletes ONLY the
-  service worker's own caches (names starting "toothtarget-"), then
-  reloads once. Patient data, treatments and sign-in live in
-  localStorage, which this never touches.
-*/
-export async function resetAppCache(): Promise<void> {
-
-  if ('serviceWorker' in navigator) {
-
-    const registrations = await navigator.serviceWorker.getRegistrations()
-
-    await Promise.all(registrations.map(reg => reg.unregister()))
-
-  }
-
-  if ('caches' in window) {
-
-    const keys = await caches.keys()
-
-    await Promise.all(
-      keys
-        .filter(key => key.startsWith('toothtarget-'))
-        .map(key => caches.delete(key))
-    )
-
-  }
-
-  window.location.reload()
 
 }
