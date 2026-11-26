@@ -653,16 +653,29 @@ button:disabled:hover {
   -webkit-line-clamp: 2;
   line-clamp: 2;
   overflow: hidden;
+  /*
+    The clamp clips at the box edge, and the box is only as tall as the
+    line boxes (1.2 x font size) - on fonts with tall ascenders/
+    descenders the tops of capitals and the tails of g, j, p, q, y were
+    cut. Extra padding gives the clip box room around the glyphs; the
+    equal negative margin cancels it, so the layout does not move.
+  */
+  padding: 0.2em 0;
+  margin: -0.2em 0;
 }
 
 .circle-phase-time {
-  margin-top: var(--space-3);
   font-size: 46px;
   font-weight: var(--weight-bold);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  line-height: 1.1;
+  /*
+    1.2, not the 1.1 that crowded the digits. The top margin gives back
+    exactly the 0.1em this adds, so the block keeps its overall height.
+  */
+  line-height: 1.2;
+  margin-top: calc(var(--space-3) - 0.1em);
 }
 
 .circle-label {
