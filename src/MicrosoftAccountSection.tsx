@@ -209,11 +209,6 @@ export default function MicrosoftAccountSection() {
         Microsoft Account
       </h2>
 
-      <p className="settings-section-description">
-        Stay signed in to keep your data backed up to OneDrive
-        automatically.
-      </p>
-
       {!isReady && (
 
         <p className="settings-section-description">
