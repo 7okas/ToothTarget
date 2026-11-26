@@ -512,9 +512,9 @@ const BACKUP_STORAGE_KEYS = [
 ] as const
 
 /*
-  Decorative analog-clock ticks around the timer circle (viewBox
-  300x300, centre 150,150): 60 marks, every 5th one a longer, thicker
-  hour mark. Purely cosmetic - not tied to the target duration or the
+  Decorative analog-clock ticks just INSIDE the progress ring (viewBox
+  300x300, centre 150,150; the ring's inner edge is at r=128): 60 marks,
+  every 5th one a longer, thicker hour mark, pointing inward. Purely cosmetic - not tied to the target duration or the
   timing in any way - so it is computed once at module load.
 */
 const CLOCK_TICKS = Array.from({ length: 60 }, (_, i) => {
@@ -523,16 +523,16 @@ const CLOCK_TICKS = Array.from({ length: 60 }, (_, i) => {
 
   const angle = (i * 6 * Math.PI) / 180
 
-  const outer = 149
+  const outer = 126
 
-  const inner = isHour ? 137 : 143
+  const inner = isHour ? 114 : 120
 
   const point = (r: number) => ({
     x: Number((150 + r * Math.sin(angle)).toFixed(2)),
     y: Number((150 - r * Math.cos(angle)).toFixed(2)),
   })
 
-  return { i, isHour, from: point(inner), to: point(outer) }
+  return { i, isHour, from: point(outer), to: point(inner) }
 
 })
 
@@ -9073,7 +9073,7 @@ const patientTreatments =
       currentPhaseTime < 0
 
 
-    const radius = 125
+    const radius = 138
 
     const circumference =
       2 *
