@@ -229,7 +229,7 @@ describe('SyncResolutionScreen render', () => {
     expect(html).toContain('left out')
     expect(html).toContain('1 record that was probably deleted will come back.')
     expect(html).toContain('I understand these deleted records will come back.')
-    expect(html).toContain('safety copy of BOTH sides')
+    expect(html).toContain('previous data (BOTH sides)')
     expect(html).toContain('last 5 resolutions')
     expect(html).toContain('Apply and sync')
     // Apply is locked until the tick.
@@ -279,7 +279,7 @@ describe('SafetyCopiesScreen render', () => {
 
     const html = renderToString(<SafetyCopiesScreen />)
 
-    expect(html).toContain('Safety copies')
+    expect(html).toContain('Restore previous data')
     expect(html).toContain('last 5 resolutions')
     expect(html).toContain('this device the last 2')
     expect(html).not.toContain('Restore this device')

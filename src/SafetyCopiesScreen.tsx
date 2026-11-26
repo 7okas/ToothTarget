@@ -162,7 +162,7 @@ function SafetyCopiesBody() {
         result.reason === 'safety-copy-failed'
           ? "Couldn't save a copy of this device's current data first, so nothing was restored. This device may be out of storage."
           : result.reason === 'invalid-copy'
-            ? "This safety copy couldn't be read, so nothing was restored."
+            ? "This saved copy couldn't be read, so nothing was restored."
             : "Couldn't finish restoring (this device may be out of storage). Nothing more was changed."
       )
 
@@ -194,12 +194,12 @@ function SafetyCopiesBody() {
   }
 
   return (
-    <div className="res-screen res-screen-top" role="dialog" aria-modal="true" aria-label="Safety copies">
+    <div className="res-screen res-screen-top" role="dialog" aria-modal="true" aria-label="Restore previous data">
 
       <header className="res-header">
 
         <div className="res-header-text">
-          <h2>Safety copies</h2>
+          <h2>Restore previous data</h2>
           <p>
             Before every resolution, a copy of both sides is saved so you
             can undo it. OneDrive keeps the last 5 resolutions and this
@@ -231,12 +231,12 @@ function SafetyCopiesBody() {
 
         {listNote && <p className="res-help">{listNote}</p>}
 
-        {loading && groups.length === 0 && <p className="res-help">Looking for safety copies…</p>}
+        {loading && groups.length === 0 && <p className="res-help">Looking for previous data…</p>}
 
         {!loading && groups.length === 0 && (
           <p className="res-help">
-            There are no safety copies yet. They appear here after you
-            resolve a difference with OneDrive.
+            There is no previous data to restore yet. It appears here after
+            you resolve a difference with OneDrive.
           </p>
         )}
 

@@ -352,7 +352,7 @@ export function buildSummary(result: ResolveResult): SummaryViewModel {
           )} changed since the last sync and may have been deleted on the other side.`
         : null,
     safetyNote:
-      'Before anything is applied, a safety copy of BOTH sides is saved. ' +
+      'Before anything is applied, your previous data (BOTH sides) is saved so you can restore it. ' +
       `OneDrive keeps the last ${CLOUD_SAFETY_COPY_RETENTION} resolutions and this device ` +
       `keeps the last ${LOCAL_SAFETY_COPY_RETENTION}; older ones are removed automatically.`,
   }
@@ -438,9 +438,9 @@ export function describeApplyResult(result: ApplyResult): OutcomeMessage {
     case 'safety-copy-failed':
       return {
         tone: 'error',
-        title: "Couldn't save the safety copies",
+        title: "Couldn't save your previous data",
         message:
-          'A safety copy could not be saved to OneDrive, so nothing was applied. ' +
+          'Your previous data could not be saved to OneDrive, so nothing was applied. ' +
           'Check your connection and try again.',
         retryable: true,
         needsRefresh: false,

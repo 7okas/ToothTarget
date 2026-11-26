@@ -298,7 +298,7 @@ describe('buildSummary', () => {
 
     const summary = buildSummary(resolve(decideAllFromDevice(diff)))
 
-    expect(summary.safetyNote).toContain('safety copy of BOTH sides')
+    expect(summary.safetyNote).toContain('previous data (BOTH sides)')
     expect(summary.safetyNote).toContain('last 5 resolutions')
     expect(summary.safetyNote).toContain('last 2')
 

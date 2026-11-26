@@ -606,7 +606,7 @@ export default function SyncResolutionScreen() {
       {state.phase === 'applying' && (
         <div className="res-body res-centered">
           <span className="startup-gate-icon startup-gate-icon-spinner" role="img" aria-hidden="true" />
-          <p>Saving safety copies and syncing - please keep this open…</p>
+          <p>Saving your previous data and syncing - please keep this open…</p>
         </div>
       )}
 
