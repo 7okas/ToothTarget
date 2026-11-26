@@ -3108,11 +3108,6 @@ button:disabled:hover {
   line-height: 1.5;
 }
 
-.settings-restore-description {
-  margin-top: var(--space-4);
-  margin-bottom: var(--space-2);
-}
-
 .settings-actions {
   margin-top: 0;
   display: flex;

@@ -274,24 +274,23 @@ export default function MicrosoftAccountSection() {
 
       {isReady && (
 
-        <p className="settings-section-description settings-restore-description">
-          Saved automatically before a sync conflict is resolved or before a
-          restore replaces this device's data. Only the latest of each is
-          kept. Restore one if a sync went wrong.
-        </p>
+        <div className="options-menu-list settings-actions settings-actions-stacked">
 
-      )}
+          <div className="settings-action-item">
 
-      {isReady && (
+            <button
+              type="button"
+              onClick={openSafetyCopiesScreen}
+            >
+              Restore previous data
+            </button>
 
-        <div className="options-menu-list settings-actions">
+            <p className="settings-action-hint">
+              Gets back your data as it was before the last sync conflict was
+              resolved.
+            </p>
 
-          <button
-            type="button"
-            onClick={openSafetyCopiesScreen}
-          >
-            Restore previous data
-          </button>
+          </div>
 
         </div>
 
