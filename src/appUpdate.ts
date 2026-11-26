@@ -4,7 +4,7 @@ import { isChunkLoadFailure } from './appUpdateRules'
   SERVICE WORKER UPDATE STATE (browser plumbing)
 
   A tiny external store the banner (UpdateBanner.tsx) and the Settings
-  section (AppUpdateSettings.tsx) both read. Nothing in here ever
+  version footer (AppVersionFooter.tsx) both read. Nothing in here ever
   reloads the page by itself: the only reload path is applyUpdate(),
   which is only called from a button press.
 

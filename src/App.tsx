@@ -84,7 +84,6 @@ import { reconcileSyncedAccount } from './cloudSyncEngine'
 import { getActiveAccount } from './auth'
 import { setTimerActive } from './appUpdate'
 import AppVersionFooter from './AppVersionFooter'
-import StorageSettings from './StorageSettings'
 import { startTreatmentBlocker } from './startTreatmentGuard'
 
 export type TemplatePhase = {
@@ -11145,8 +11144,6 @@ const patientTreatments =
         <div className="procedure-page">
 
           <MicrosoftAccountSection />
-
-          <StorageSettings />
 
           <h2 className="settings-section-title">
             Data Export &amp; Backup
