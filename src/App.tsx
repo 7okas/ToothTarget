@@ -511,6 +511,31 @@ const BACKUP_STORAGE_KEYS = [
   'toothTargetProcedures',
 ] as const
 
+/*
+  Decorative analog-clock ticks around the timer circle (viewBox
+  300x300, centre 150,150): 60 marks, every 5th one a longer, thicker
+  hour mark. Purely cosmetic - not tied to the target duration or the
+  timing in any way - so it is computed once at module load.
+*/
+const CLOCK_TICKS = Array.from({ length: 60 }, (_, i) => {
+
+  const isHour = i % 5 === 0
+
+  const angle = (i * 6 * Math.PI) / 180
+
+  const outer = 149
+
+  const inner = isHour ? 137 : 143
+
+  const point = (r: number) => ({
+    x: Number((150 + r * Math.sin(angle)).toFixed(2)),
+    y: Number((150 - r * Math.cos(angle)).toFixed(2)),
+  })
+
+  return { i, isHour, from: point(inner), to: point(outer) }
+
+})
+
 function downloadTextFile(
   filename: string,
   content: string,
@@ -9048,7 +9073,7 @@ const patientTreatments =
       currentPhaseTime < 0
 
 
-    const radius = 128
+    const radius = 125
 
     const circumference =
       2 *
@@ -9173,6 +9198,22 @@ const patientTreatments =
               height="300"
               viewBox="0 0 300 300"
             >
+
+              {CLOCK_TICKS.map(tick => (
+                <line
+                  key={tick.i}
+                  className={
+                    tick.isHour
+                      ? 'clock-tick clock-tick-hour'
+                      : 'clock-tick clock-tick-minute'
+                  }
+                  x1={tick.from.x}
+                  y1={tick.from.y}
+                  x2={tick.to.x}
+                  y2={tick.to.y}
+                  aria-hidden="true"
+                />
+              ))}
 
               <circle
                 className="progress-background"

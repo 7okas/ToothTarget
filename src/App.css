@@ -565,15 +565,29 @@ button:disabled:hover {
   transform: rotate(-90deg);
 }
 
+.clock-tick {
+  stroke-linecap: butt;
+}
+
+.clock-tick-hour {
+  stroke: var(--color-text-muted);
+  stroke-width: 3;
+}
+
+.clock-tick-minute {
+  stroke: var(--color-border-strong);
+  stroke-width: 1.5;
+}
+
 .progress-background {
   fill: none;
   stroke: var(--color-border);
-  stroke-width: 17;
+  stroke-width: 20;
 }
 
 .progress-ring-circle {
   fill: none;
-  stroke-width: 17;
+  stroke-width: 20;
   stroke-linecap: round;
 
   transition:
@@ -614,7 +628,7 @@ button:disabled:hover {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 252px;
+  width: 244px;
   transform: translate(-50%, -50%);
 
   display: flex;
@@ -3093,7 +3107,7 @@ button:disabled:hover {
   }
 
   .circle-content {
-    width: 221px;
+    width: 214px;
   }
 
   .circle-phase-time {
@@ -3160,7 +3174,7 @@ button:disabled:hover {
   }
 
   .circle-content {
-    width: 190px;
+    width: 183px;
   }
 
   .circle-phase-name {
