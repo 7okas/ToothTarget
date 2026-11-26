@@ -8638,7 +8638,7 @@ const patientTreatments =
 
         <div className="procedure-page">
 
-          <div className="template-list">
+          <div className="template-list list-no-scrollbar">
 
             {procedures.filter(isProcedureActive).map(
               procedure => (
@@ -8700,7 +8700,7 @@ const patientTreatments =
 
           <>
 
-          <div className="patient-list">
+          <div className="patient-list list-no-scrollbar">
 
             {!showAddProcedure && (
 
@@ -8736,7 +8736,7 @@ const patientTreatments =
 
           {showArchivedProcedures && (
 
-            <div className="template-list">
+            <div className="template-list list-no-scrollbar">
 
               {procedures.filter(procedure => !isProcedureActive(procedure)).map(
                 procedure => (
@@ -10061,7 +10061,7 @@ const patientTreatments =
 
           {!browseSpecialization && (
 
-            <div className="patient-list">
+            <div className="patient-list list-no-scrollbar">
 
               {(TEMPLATE_EDITING_ENABLED
                 ? TEMPLATE_TAXONOMY
@@ -10087,7 +10087,7 @@ const patientTreatments =
 
           {browseSpecialization && !browseProcedure && (
 
-            <div className="patient-list">
+            <div className="patient-list list-no-scrollbar">
 
               {browseSpecialization.procedures.map(procedure => (
 
@@ -10110,7 +10110,7 @@ const patientTreatments =
 
           {browseSpecialization && browseProcedure && !browseType && (
 
-            <div className="patient-list">
+            <div className="patient-list list-no-scrollbar">
 
               {browseProcedure.types.map(type => (
 
@@ -10135,7 +10135,7 @@ const patientTreatments =
 
             <>
 
-              <div className="template-list">
+              <div className="template-list list-no-scrollbar">
 
                 {bucketTemplates.length === 0 && (
                   <p className="template-meta template-list-empty">

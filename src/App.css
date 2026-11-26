@@ -1958,6 +1958,24 @@ button:disabled:hover {
 }
 
 
+/*
+  Selection lists (Select Procedure, Manage Templates) keep their
+  overflow-y: auto scrolling - touch, wheel and keyboard all still work -
+  but never draw a scrollbar. Deliberately NOT overflow: hidden, which
+  would block scrolling. Not applied to the Home patient list.
+*/
+.list-no-scrollbar {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* old Edge / IE */
+}
+
+.list-no-scrollbar::-webkit-scrollbar {
+  display: none;                  /* Chrome, Safari, new Edge */
+  width: 0;
+  height: 0;
+}
+
+
 /* ===========================
    Patient list
 
