@@ -520,20 +520,6 @@ button:disabled:hover {
   font-weight: var(--weight-bold);
 }
 
-.chair-time-button {
-  display: flex;
-  width: 100%;
-  background: var(--color-surface);
-  color: var(--color-text);
-  border: 1.5px solid var(--color-border-strong);
-  margin-bottom: var(--space-3);
-}
-
-.chair-time-button:hover {
-  background: var(--color-surface-alt);
-  border-color: var(--color-text-muted);
-}
-
 
 /* ===========================================================
    MAIN TIMER

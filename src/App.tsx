@@ -2939,19 +2939,6 @@ function App() {
 
   const [startTreatmentError, setStartTreatmentError] = useState<string | null>(null)
 
-  /*
-    CHAIR TIME (Phase 16)
-
-    Captured before the treatment officially exists - the dentist
-    can mark it the moment the patient sits down, ahead of Start
-    Treatment - then handed off into the new ActiveTreatment once
-    startTreatment() runs. Reset whenever a fresh New Treatment flow
-    begins so it can never leak into an unrelated treatment.
-  */
-
-  const [pendingChairEnteredAt, setPendingChairEnteredAt] =
-    useState<string | null>(null)
-
   const [activeTreatment, setActiveTreatment] =
     useState<ActiveTreatment | null>(null)
 
@@ -4664,8 +4651,6 @@ async function openPatient(
 
     setNewProcedureName('')
 
-    setPendingChairEnteredAt(null)
-
     setEditProcedureId(null)
 
     setEditProcedureError(null)
@@ -4677,11 +4662,6 @@ async function openPatient(
     setScreen('procedureSelect')
 
   }
-
-  function markPatientInChair() {
-    setPendingChairEnteredAt(new Date().toISOString())
-  }
-
 
   /*
     SELECT PROCEDURE -> TOOTH TYPE SELECTION
@@ -5060,8 +5040,12 @@ async function openPatient(
 
       tags: [],
 
-      chairEnteredAt:
-        pendingChairEnteredAt,
+      /*
+        The "Mark Patient In Chair" button was removed, so new
+        treatments never record this. The field stays in the data
+        shape so older saved data / OneDrive backups still load.
+      */
+      chairEnteredAt: null,
 
       chairLeftAt: null,
 
@@ -5084,8 +5068,6 @@ async function openPatient(
     setActiveTreatment(
       newTreatment
     )
-
-    setPendingChairEnteredAt(null)
 
     setScreen('timer')
 
@@ -9008,16 +8990,6 @@ const patientTreatments =
             </div>
 
           )}
-
-          <button
-            type="button"
-            className="chair-time-button"
-            onClick={markPatientInChair}
-          >
-            {pendingChairEnteredAt
-              ? '✓ Patient In Chair'
-              : 'Mark Patient In Chair (optional)'}
-          </button>
 
           {startTreatmentError && (
             <p className="settings-error-message" role="alert">
