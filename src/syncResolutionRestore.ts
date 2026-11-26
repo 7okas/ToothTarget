@@ -141,7 +141,7 @@ export type SafetyCopyGroup = {
 
 /*
   Merges this device's entries and OneDrive's listing into one list,
-  newest first. A resolution held in both places is one group; where
+  newest first, one entry per kind. A resolution held in both places is one group; where
   the copy is available locally it is used from there (no download).
 */
 export function buildSafetyCopyGroups(
@@ -199,9 +199,28 @@ export function buildSafetyCopyGroups(
 
   }
 
-  return [...groups.values()].sort((a, b) =>
+  const newestFirst = [...groups.values()].sort((a, b) =>
     a.resolutionId < b.resolutionId ? 1 : -1
   )
+
+  /*
+    At most one entry per kind: the newest resolution copy and the
+    newest before-restore copy. Older leftovers (eg. OneDrive files
+    from before only the latest was kept) are not offered here.
+  */
+  const seenKinds = new Set<SafetyCopyGroup['kind']>()
+
+  return newestFirst.filter(group => {
+
+    if (seenKinds.has(group.kind)) {
+      return false
+    }
+
+    seenKinds.add(group.kind)
+
+    return true
+
+  })
 
 }
 

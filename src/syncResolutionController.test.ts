@@ -412,7 +412,7 @@ describe('apply', () => {
     goToSummary()
 
     expect(getControllerState().summary!.lines).toHaveLength(4)
-    expect(getControllerState().summary!.safetyNote).toContain('last 5 resolutions')
+    expect(getControllerState().summary!.safetyNote).toContain('Only the latest is kept')
     expect(fake.syncWriteCalls).toBe(0)
     expect(storage.writes).toEqual([])
 

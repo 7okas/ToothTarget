@@ -202,8 +202,8 @@ function SafetyCopiesBody() {
           <h2>Restore previous data</h2>
           <p>
             Before every resolution, a copy of both sides is saved so you
-            can undo it. OneDrive keeps the last 5 resolutions and this
-            device the last 2.
+            can undo it. Only the latest is kept, on OneDrive and on this
+            device; a newer one replaces it.
           </p>
         </div>
 

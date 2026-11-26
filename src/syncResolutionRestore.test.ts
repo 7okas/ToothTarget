@@ -228,7 +228,23 @@ describe('buildSafetyCopyGroups', () => {
     ...(reason ? { reason } : {}),
   })
 
-  it('merges local and OneDrive, newest first, one group per resolution', () => {
+  it('merges the local entry with the matching OneDrive files into one group', () => {
+
+    const groups = buildSafetyCopyGroups(
+      [localEntry(id2)],
+      [
+        { resolutionId: id2, capturedAt: 'x', deviceFile: safetyCopyFileName(id2, 'device'), cloudFile: safetyCopyFileName(id2, 'cloud') },
+      ]
+    )
+
+    expect(groups.map(g => g.resolutionId)).toEqual([id2])
+    expect(groups[0].heldOn).toEqual(['this-device', 'onedrive'])
+    expect(groups[0].device?.document).toBeDefined()
+    expect(groups[0].device?.fileName).toBe(safetyCopyFileName(id2, 'device'))
+
+  })
+
+  it('shows at most one entry per kind: older leftovers are not offered', () => {
 
     const groups = buildSafetyCopyGroups(
       [localEntry(id2)],
@@ -239,12 +255,23 @@ describe('buildSafetyCopyGroups', () => {
       ]
     )
 
-    expect(groups.map(g => g.resolutionId)).toEqual([id3, id2, id1])
-    expect(groups[1].heldOn).toEqual(['this-device', 'onedrive'])
-    expect(groups[1].device?.document).toBeDefined()
-    expect(groups[1].device?.fileName).toBe(safetyCopyFileName(id2, 'device'))
+    expect(groups.map(g => g.resolutionId)).toEqual([id3])
     expect(groups[0].heldOn).toEqual(['onedrive'])
     expect(groups[0].cloud).toBeNull()
+
+  })
+
+  it('a resolution copy and a before-restore copy are both listed (one each)', () => {
+
+    const groups = buildSafetyCopyGroups(
+      [localEntry(id1, 'before-restore'), localEntry(id2), localEntry(id3, 'before-restore')],
+      []
+    )
+
+    expect(groups.map(g => [g.resolutionId, g.kind])).toEqual([
+      [id3, 'before-restore'],
+      [id2, 'resolution'],
+    ])
 
   })
 

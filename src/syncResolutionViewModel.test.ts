@@ -294,13 +294,12 @@ describe('buildSummary', () => {
 
   })
 
-  it('states the retention promise: last 5 on OneDrive, last 2 on this device', () => {
+  it('states the retention promise: only the latest is kept', () => {
 
     const summary = buildSummary(resolve(decideAllFromDevice(diff)))
 
     expect(summary.safetyNote).toContain('previous data (BOTH sides)')
-    expect(summary.safetyNote).toContain('last 5 resolutions')
-    expect(summary.safetyNote).toContain('last 2')
+    expect(summary.safetyNote).toContain('Only the latest is kept')
 
   })
 

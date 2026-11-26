@@ -42,11 +42,15 @@ import {
   HOW LONG THEY ARE KEPT
   ============================================================
 
-  Count-based, no time expiry:
-    - this device: the last 2 resolutions
-    - OneDrive:    the last 5 resolutions (10 files)
-  When a newer resolution is saved, anything beyond those counts is
-  deleted. Pruning is best-effort and can never fail an apply.
+  Only the LATEST of each kind is kept, with no time expiry:
+    - kind 'resolution' (both sides, saved before a conflict is
+      applied): 1 on this device, 1 on OneDrive (its 2 files)
+    - kind 'before-restore' (this device's data, saved before a
+      Restore replaces it): 1, on this device only
+  The kinds never push each other out. A new copy is written FIRST and
+  only after it is stored is the older one of the same kind deleted, so
+  a failed save always leaves the previous copy in place. Pruning is
+  best-effort and can never fail an apply.
 
   ============================================================
   WHEN A FAILURE BLOCKS THE APPLY
@@ -63,9 +67,10 @@ import {
 
 export const LOCAL_SAFETY_COPY_KEY = 'toothTargetResolutionSafetyCopies'
 
-export const LOCAL_SAFETY_COPY_RETENTION = 2
+/* How many of EACH kind are kept (see the header comment). */
+export const LOCAL_SAFETY_COPY_RETENTION = 1
 
-export const CLOUD_SAFETY_COPY_RETENTION = 5
+export const CLOUD_SAFETY_COPY_RETENTION = 1
 
 export const SAFETY_COPY_FILE_PREFIX = 'toothtarget-resolution-'
 
@@ -211,11 +216,17 @@ export function validateSafetyCopy(value: unknown): SafetyCopyValidationResult {
 /* ---------- retention (pure) ---------- */
 
 /*
-  Which file names to delete so only the newest `keep` resolutions
-  remain. Works from the listing alone: groups this module's own files
-  by resolution id (ids sort by time) and returns every file of every
-  older resolution. Names that aren't safety-copy files (the sync file,
-  A/B/C backups, anything else) are never returned.
+  Which file names to delete so only the newest `keep` COMPLETE
+  resolutions (both the device and cloud file present) remain. Works
+  from the listing alone and is deliberately cautious:
+    - a half-uploaded pair is never counted as "the newest" - so it can
+      never cause the last good copy to be deleted;
+    - nothing is deleted at all unless there is at least `keep` complete
+      pair to hold on to;
+    - files NEWER than the oldest kept pair are never touched (they may
+      be another device's save in progress).
+  Names that aren't safety-copy files (the sync file, A/B/C backups,
+  anything else) are never returned.
 */
 export function selectFilesToPrune(
   fileNames: string[],
@@ -226,12 +237,36 @@ export function selectFilesToPrune(
     .map(parseSafetyCopyFileName)
     .filter((file): file is NonNullable<typeof file> => file !== null)
 
-  const ids = [...new Set(parsed.map(file => file.resolutionId))].sort().reverse()
+  const sidesById = new Map<string, Set<SafetyCopySide>>()
 
-  const keepIds = new Set(ids.slice(0, keep))
+  for (const file of parsed) {
+
+    const sides = sidesById.get(file.resolutionId) ?? new Set<SafetyCopySide>()
+
+    sides.add(file.side)
+
+    sidesById.set(file.resolutionId, sides)
+
+  }
+
+  const completeIds = [...sidesById.entries()]
+    .filter(([, sides]) => sides.has('device') && sides.has('cloud'))
+    .map(([id]) => id)
+    .sort()
+    .reverse()
+
+  if (completeIds.length < keep || keep < 1) {
+    return []
+  }
+
+  const keepIds = new Set(completeIds.slice(0, keep))
+
+  const oldestKept = completeIds[keep - 1]
 
   return parsed
-    .filter(file => !keepIds.has(file.resolutionId))
+    .filter(
+      file => !keepIds.has(file.resolutionId) && file.resolutionId < oldestKept
+    )
     .map(file => file.fileName)
 
 }
@@ -284,22 +319,37 @@ export function readLocalSafetyCopies(): LocalSafetyCopyEntry[] {
 
 }
 
+function localEntryKind(entry: LocalSafetyCopyEntry): 'resolution' | 'before-restore' {
+  return entry.reason === 'before-restore' ? 'before-restore' : 'resolution'
+}
+
 /*
   Throws on failure (eg. a localStorage quota error) - the caller
   decides what that means (a warning, per this module's own header).
-  Keeps only the newest LOCAL_SAFETY_COPY_RETENTION entries. If the
-  write is rejected, whatever was stored before is left exactly as it
-  was (setItem is all-or-nothing for a single key).
+  Keeps only the newest LOCAL_SAFETY_COPY_RETENTION entry OF EACH KIND:
+  the new entry replaces the previous one of its own kind and leaves the
+  other kind alone. The whole list is written in ONE setItem, which is
+  all-or-nothing, so if the write is rejected the previous copy is left
+  exactly as it was - the old one is only ever replaced by a new one
+  that was actually stored.
 */
 export function saveLocalSafetyCopy(entry: LocalSafetyCopyEntry): void {
+
+  const kind = localEntryKind(entry)
 
   const existing = readLocalSafetyCopies().filter(
     other => other.resolutionId !== entry.resolutionId
   )
 
-  const next = [entry, ...existing]
-    .sort((a, b) => (a.resolutionId < b.resolutionId ? 1 : -1))
-    .slice(0, LOCAL_SAFETY_COPY_RETENTION)
+  const keptOfOtherKinds = existing.filter(other => localEntryKind(other) !== kind)
+
+  const keptOfThisKind = existing
+    .filter(other => localEntryKind(other) === kind)
+    .slice(0, Math.max(0, LOCAL_SAFETY_COPY_RETENTION - 1))
+
+  const next = [entry, ...keptOfThisKind, ...keptOfOtherKinds].sort((a, b) =>
+    a.resolutionId < b.resolutionId ? 1 : -1
+  )
 
   localStorage.setItem(LOCAL_SAFETY_COPY_KEY, JSON.stringify(next))
 
@@ -425,8 +475,8 @@ export async function saveResolutionSafetyCopies(
 
 /*
   Best-effort: never throws, never fails an apply. Lists the App Folder
-  and deletes every safety-copy file beyond the newest
-  CLOUD_SAFETY_COPY_RETENTION resolutions.
+  and deletes the safety-copy files older than the newest
+  CLOUD_SAFETY_COPY_RETENTION complete resolution (see selectFilesToPrune).
 */
 export async function pruneCloudSafetyCopies(): Promise<void> {
 

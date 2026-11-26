@@ -14,10 +14,6 @@ import {
   type Decisions,
   type ResolveResult,
 } from './syncResolve'
-import {
-  CLOUD_SAFETY_COPY_RETENTION,
-  LOCAL_SAFETY_COPY_RETENTION,
-} from './syncResolutionSafetyCopy'
 
 /*
   RESOLUTION VIEW MODEL (Phase 6, step 6)
@@ -353,8 +349,7 @@ export function buildSummary(result: ResolveResult): SummaryViewModel {
         : null,
     safetyNote:
       'Before anything is applied, your previous data (BOTH sides) is saved so you can restore it. ' +
-      `OneDrive keeps the last ${CLOUD_SAFETY_COPY_RETENTION} resolutions and this device ` +
-      `keeps the last ${LOCAL_SAFETY_COPY_RETENTION}; older ones are removed automatically.`,
+      'Only the latest is kept, on OneDrive and on this device; a newer one replaces it.',
   }
 
 }

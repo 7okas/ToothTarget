@@ -304,8 +304,45 @@ describe('retention - pure selection', () => {
       safetyCopyFileName(resolutionIdFor(at(minute)), 'cloud'),
     ])
 
-    expect(selectFilesToPrune(names)).toEqual([])
-    expect(CLOUD_SAFETY_COPY_RETENTION).toBe(5)
+    expect(selectFilesToPrune(names, 5)).toEqual([])
+    expect(CLOUD_SAFETY_COPY_RETENTION).toBe(1)
+
+  })
+
+  it('by default keeps only the newest complete resolution', () => {
+
+    const names = [1, 2, 3].flatMap(minute => [
+      safetyCopyFileName(resolutionIdFor(at(minute)), 'device'),
+      safetyCopyFileName(resolutionIdFor(at(minute)), 'cloud'),
+    ])
+
+    expect(selectFilesToPrune(names).sort()).toEqual(
+      [1, 2].flatMap(minute => [
+        safetyCopyFileName(resolutionIdFor(at(minute)), 'cloud'),
+        safetyCopyFileName(resolutionIdFor(at(minute)), 'device'),
+      ]).sort()
+    )
+
+  })
+
+  it('a half-uploaded newer pair never causes the last good pair to be deleted', () => {
+
+    const good = [
+      safetyCopyFileName(resolutionIdFor(at(1)), 'device'),
+      safetyCopyFileName(resolutionIdFor(at(1)), 'cloud'),
+    ]
+
+    const halfNewer = [safetyCopyFileName(resolutionIdFor(at(2)), 'device')]
+
+    expect(selectFilesToPrune([...good, ...halfNewer])).toEqual([])
+
+  })
+
+  it('deletes nothing when there is no complete pair at all', () => {
+
+    expect(
+      selectFilesToPrune([safetyCopyFileName(resolutionIdFor(at(1)), 'device')])
+    ).toEqual([])
 
   })
 
@@ -471,7 +508,7 @@ describe('saveResolutionSafetyCopies - failure rules', () => {
 
 describe('saveResolutionSafetyCopies - retention', () => {
 
-  it('keeps the last 5 resolutions on OneDrive (10 files), newest survive', async () => {
+  it('keeps only the latest resolution on OneDrive (its 2 files)', async () => {
 
     for (let minute = 1; minute <= 7; minute += 1) {
 
@@ -484,17 +521,17 @@ describe('saveResolutionSafetyCopies - retention', () => {
 
     }
 
-    expect(folder.size).toBe(10)
+    expect(folder.size).toBe(2)
 
     const listing = await listCloudSafetyCopies()
 
-    expect(listing.map(item => item.resolutionId)).toEqual(
-      [7, 6, 5, 4, 3].map(minute => resolutionIdFor(at(minute)))
-    )
+    expect(listing.map(item => item.resolutionId)).toEqual([
+      resolutionIdFor(at(7)),
+    ])
 
   })
 
-  it('keeps the last 2 resolutions on this device', async () => {
+  it('keeps only the latest resolution on this device', async () => {
 
     for (let minute = 1; minute <= 4; minute += 1) {
 
@@ -507,10 +544,105 @@ describe('saveResolutionSafetyCopies - retention', () => {
 
     }
 
-    expect(LOCAL_SAFETY_COPY_RETENTION).toBe(2)
+    expect(LOCAL_SAFETY_COPY_RETENTION).toBe(1)
     expect(readLocalSafetyCopies().map(entry => entry.resolutionId)).toEqual([
       resolutionIdFor(at(4)),
-      resolutionIdFor(at(3)),
+    ])
+
+  })
+
+  it('the new OneDrive copy is fully written BEFORE the older one is deleted', async () => {
+
+    await saveResolutionSafetyCopies({
+      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(1),
+    })
+
+    const oldDevice = safetyCopyFileName(resolutionIdFor(at(1)), 'device')
+    const oldCloud = safetyCopyFileName(resolutionIdFor(at(1)), 'cloud')
+
+    const oldStillThereAtEveryWrite: boolean[] = []
+
+    failWrites.when = () => {
+      oldStillThereAtEveryWrite.push(folder.has(oldDevice) && folder.has(oldCloud))
+      return false
+    }
+
+    await saveResolutionSafetyCopies({
+      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(2),
+    })
+
+    expect(oldStillThereAtEveryWrite).toEqual([true, true])
+    expect(folder.has(oldDevice)).toBe(false)
+    expect(folder.has(oldCloud)).toBe(false)
+    expect(folder.size).toBe(2)
+
+  })
+
+  it('a failed OneDrive save keeps the old copy (and blocks the apply)', async () => {
+
+    await saveResolutionSafetyCopies({
+      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(1),
+    })
+
+    const second = safetyCopyFileName(resolutionIdFor(at(2)), 'cloud')
+
+    failWrites.when = fileName => fileName === second
+
+    const result = await saveResolutionSafetyCopies({
+      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(2),
+    })
+
+    expect(result.ok).toBe(false)
+    expect([...folder.keys()].sort()).toEqual([
+      safetyCopyFileName(resolutionIdFor(at(1)), 'cloud'),
+      safetyCopyFileName(resolutionIdFor(at(1)), 'device'),
+    ].sort())
+    expect(readLocalSafetyCopies().map(entry => entry.resolutionId)).toEqual([
+      resolutionIdFor(at(1)),
+    ])
+
+  })
+
+  it('a failed LOCAL save keeps the old local copy', async () => {
+
+    await saveResolutionSafetyCopies({
+      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(1),
+    })
+
+    storage.failKey = LOCAL_SAFETY_COPY_KEY
+
+    const result = await saveResolutionSafetyCopies({
+      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(2),
+    })
+
+    storage.failKey = null
+
+    expect(result).toMatchObject({ ok: true, localSaved: false })
+    expect(readLocalSafetyCopies().map(entry => entry.resolutionId)).toEqual([
+      resolutionIdFor(at(1)),
+    ])
+
+  })
+
+  it('each kind is kept separately on this device', () => {
+
+    const entry = (minute: number, reason?: 'before-restore') => ({
+      resolutionId: resolutionIdFor(at(minute)),
+      capturedAt: at(minute),
+      cloudETag: null,
+      device: deviceDoc,
+      cloud: cloudDoc,
+      ...(reason ? { reason } : {}),
+    })
+
+    saveLocalSafetyCopy(entry(1))
+    saveLocalSafetyCopy(entry(2, 'before-restore'))
+    saveLocalSafetyCopy(entry(3))
+    saveLocalSafetyCopy(entry(4, 'before-restore'))
+
+    expect(readLocalSafetyCopies().map(e => [e.resolutionId, e.reason ?? 'resolution'])).toEqual([
+      [resolutionIdFor(at(4)), 'before-restore'],
+      [resolutionIdFor(at(3)), 'resolution'],
     ])
 
   })
@@ -586,13 +718,16 @@ describe('reading copies back from OneDrive', () => {
 
   it('lists newest first, pairing device and cloud files per resolution', async () => {
 
-    await saveResolutionSafetyCopies({
-      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(1),
-    })
+    for (const minute of [1, 2]) {
 
-    await saveResolutionSafetyCopies({
-      device: deviceDoc, cloud: cloudDoc, cloudETag: null, nowIso: at(2),
-    })
+      for (const side of ['device', 'cloud'] as const) {
+        folder.set(
+          safetyCopyFileName(resolutionIdFor(at(minute)), side),
+          buildSafetyCopy(side, resolutionIdFor(at(minute)), at(minute), null, deviceDoc)
+        )
+      }
+
+    }
 
     folder.set('toothtarget-sync.json', {})
 
