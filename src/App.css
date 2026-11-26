@@ -555,10 +555,14 @@ button:disabled:hover {
   transform: rotate(-90deg);
 }
 
+/*
+  Overtime also starts at 12 o'clock and runs clockwise (a second,
+  red lap): no mirroring, so the ring never changes direction.
+*/
 .overtime-ring {
   width: 320px;
   height: 320px;
-  transform: rotate(90deg) scaleX(-1);
+  transform: rotate(-90deg);
 }
 
 .progress-background {

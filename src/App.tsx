@@ -9077,9 +9077,14 @@ const patientTreatments =
         )
 
 
+      /*
+        The ring FILLS clockwise from 12 o'clock: progress is the
+        fraction of the target that has remaining, so elapsed =
+        1 - progress is how much of the ring is drawn.
+      */
       strokeDashoffset =
         circumference *
-        (1 - progress)
+        progress
 
     } else {
 
