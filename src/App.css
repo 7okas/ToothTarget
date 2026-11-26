@@ -1959,17 +1959,33 @@ button:disabled:hover {
 
 
 /*
-  Selection lists (Select Procedure, Manage Templates) keep their
-  overflow-y: auto scrolling - touch, wheel and keyboard all still work -
-  but never draw a scrollbar. Deliberately NOT overflow: hidden, which
-  would block scrolling. Not applied to the Home patient list.
+  Scrollable boxes that should never draw a scrollbar. They keep their
+  overflow-x/-y: auto, so touch, wheel and keyboard scrolling (and sideways
+  scrolling on a narrow phone) all still work - deliberately NOT
+  overflow: hidden, which would block scrolling.
+
+  Applied by class to the Select Procedure / Manage Templates lists, and by
+  selector to: the tooth chart rows, popup cards (modal-card, incl. the
+  Treatment Options card), the startup card, and the two table wrappers
+  (checked treatments, monthly table). NOT applied to the Home patient
+  list (keeps its bar) or the full-screen sync/restore body (.res-body).
 */
-.list-no-scrollbar {
+.list-no-scrollbar,
+.tooth-chart-arch,
+.modal-card,
+.startup-gate-card,
+.checked-table-scroll,
+.monthly-table-scroll {
   scrollbar-width: none;          /* Firefox */
   -ms-overflow-style: none;       /* old Edge / IE */
 }
 
-.list-no-scrollbar::-webkit-scrollbar {
+.list-no-scrollbar::-webkit-scrollbar,
+.tooth-chart-arch::-webkit-scrollbar,
+.modal-card::-webkit-scrollbar,
+.startup-gate-card::-webkit-scrollbar,
+.checked-table-scroll::-webkit-scrollbar,
+.monthly-table-scroll::-webkit-scrollbar {
   display: none;                  /* Chrome, Safari, new Edge */
   width: 0;
   height: 0;
@@ -2841,6 +2857,17 @@ button:disabled:hover {
   padding: 0;
   min-height: 0;
   cursor: pointer;
+}
+
+.tooth-button:active {
+  /*
+    The global button:active nudges a pressed button down 1px. The tallest
+    tooth in the lower row sits exactly on the bottom edge of its row, so
+    that 1px pushed it past the row and made the row grow a vertical
+    scrollbar (iOS also leaves :active on after a tap, so the tooth looked
+    lower than its neighbours). Teeth do not move when pressed.
+  */
+  transform: none;
 }
 
 .tooth-button:hover {
