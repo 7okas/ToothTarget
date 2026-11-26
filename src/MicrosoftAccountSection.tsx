@@ -15,8 +15,6 @@ import {
 } from './cloudSyncScheduler'
 import { reconcileSyncedAccount, syncCloudNow } from './cloudSyncEngine'
 import { signOutWithBestEffortSync } from './cloudSyncSignOut'
-import { canTriggerManualSync } from './syncStatusIndicatorState'
-import { startSyncNow } from './badgePanelActions'
 import { openSafetyCopiesScreen } from './syncResolutionStore'
 
 /*
@@ -54,15 +52,11 @@ const CLOUD_SYNC_STATUS_LABEL: Record<
   keys directly. Signing in here is what makes automatic, multi-device
   cloud sync active (see cloudSyncEngine.ts/cloudSyncScheduler.ts).
 
-  Phase 8 - "Sync Now" replaces the old separate "Backup to Cloud"/
-  "Load from Cloud" one-way snapshot actions with a single button that
-  triggers the SAME automatic two-way sync as every other trigger in
-  the app (the pull-first startSyncNow(), guarded by the same
-  canTriggerManualSync() SyncStatusIndicator.tsx's own manual-sync
-  affordance uses) - not a new sync mechanism. The underlying one-way
-  backup/restore functions (cloudBackup.ts, cloudStorage.ts's
-  readCloudData/writeCloudData) were left in place, just no longer
-  wired to any UI here.
+  There is no manual sync button here any more: sync is automatic, and
+  the top-right badge panel (SyncStatusIndicator.tsx) has the "Sync
+  now" / "Sign in again" actions. The older one-way backup/restore
+  functions (cloudBackup.ts, cloudStorage.ts's readCloudData/
+  writeCloudData) were left in place, just not wired to any UI here.
 
   Reuses the existing settings-section-title / settings-section-
   description / settings-actions / settings-error-message classes
@@ -207,23 +201,6 @@ export default function MicrosoftAccountSection() {
 
   }
 
-  /*
-    Phase 8 - "Sync Now": the same guard SyncStatusIndicator.tsx's own
-    clickable checkmark badge uses, re-checked here against the live
-    cloudSyncStatus rather than trusting the button's disabled state
-    alone, so this can never queue a duplicate/conflicting sync on top
-    of one already running or about to run.
-  */
-  function handleSyncNow() {
-
-    /*
-      Pull-first, same as the startup sync and the badge - see
-      badgePanelActions.ts. startSyncNow() applies the guard above.
-    */
-    startSyncNow(cloudSyncStatus, { requestPull: requestCloudPullIfSignedIn })
-
-  }
-
   return (
 
     <>
@@ -276,16 +253,6 @@ export default function MicrosoftAccountSection() {
               disabled={isBusy}
             >
               {isBusy ? 'Signing Out…' : 'Sign Out'}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleSyncNow}
-              disabled={!canTriggerManualSync(cloudSyncStatus)}
-            >
-              {cloudSyncStatus === 'syncing' || cloudSyncStatus === 'pending'
-                ? 'Syncing…'
-                : 'Sync Now'}
             </button>
 
           </div>
