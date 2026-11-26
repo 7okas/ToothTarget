@@ -234,12 +234,23 @@ export default function StartupGateScreen() {
 
     <div className="startup-gate-overlay">
 
-      <div className="startup-gate-card">
+      <div
+        className={
+          'startup-gate-card' +
+          (view.kind === 'sign-in-prompt'
+            ? ' startup-gate-card-sign-in'
+            : '') +
+          (view.kind === 'syncing' || view.kind === 'success'
+            ? ' startup-gate-card-compact'
+            : '')
+        }
+      >
 
         {/*
           The same logo on every view (sign-in, syncing, success, diverged,
-          error), rendered once above them so it never moves or reloads when
-          the view changes - the status icon of each view stays below it.
+          error), rendered once above them so it never reloads when the
+          view changes - the status icon of each view stays below it. Only
+          the sign-in card has a fixed height; the others fit their content.
         */}
 
         <img

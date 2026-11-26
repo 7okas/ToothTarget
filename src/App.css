@@ -1371,15 +1371,28 @@ button:disabled:hover {
   max-width: 440px;
   width: 100%;
   max-height: calc(100vh - var(--space-8));
-  /*
-    Same height for every gate view (the logo is on all of them), so the
-    card is not re-centred - and the logo does not jump - when the view
-    changes. Capped by the viewport so it can never exceed the screen.
-  */
-  min-height: min(500px, calc(100vh - var(--space-8)));
   overflow-y: auto;
   text-align: center;
   box-shadow: var(--shadow-md);
+}
+
+.startup-gate-card-sign-in {
+  /*
+    Only the sign-in card keeps its fixed, roomy height (capped by the
+    viewport so it can never exceed the screen). Every other view sizes
+    to its own content.
+  */
+  min-height: min(500px, calc(100vh - var(--space-8)));
+}
+
+.startup-gate-card-compact {
+  /*
+    Auto sign-in / syncing / "Synced": just the logo and a status line,
+    so the card hugs them instead of matching the sign-in card.
+  */
+  width: auto;
+  min-width: 260px;
+  padding: var(--space-6) var(--space-8);
 }
 
 .startup-gate-card h2 {
