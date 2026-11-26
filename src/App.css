@@ -1406,15 +1406,6 @@ button:disabled:hover {
   box-shadow: var(--shadow-md);
 }
 
-.startup-gate-card-sign-in {
-  /*
-    Only the sign-in card keeps its fixed, roomy height (capped by the
-    viewport so it can never exceed the screen). Every other view sizes
-    to its own content.
-  */
-  min-height: min(500px, calc(100vh - var(--space-8)));
-}
-
 .startup-gate-card-compact {
   /*
     Auto sign-in / syncing / "Synced": just the logo and a status line,
