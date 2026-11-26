@@ -23,9 +23,7 @@ export const STORAGE_STATUS_TEXT: Record<StorageStatus, string> = {
 }
 
 export const BACKUP_NOTE =
-  'Your data lives on this device. Keep OneDrive sync signed in, or ' +
-  'export a backup from time to time, especially before clearing ' +
-  'Safari data or deleting the app icon.'
+  'Export a backup before clearing Safari data or deleting the app icon.'
 
 function defaultStorage(): StorageLike | undefined {
 
