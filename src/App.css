@@ -3050,6 +3050,12 @@ button:disabled:hover {
   gap: var(--space-3);
 }
 
+/* Stacked action groups (e.g. Sync Now above Safety copies) get the
+   same gap as the buttons inside a group. */
+.settings-actions + .settings-actions {
+  margin-top: var(--space-3);
+}
+
 .hidden-file-input {
   display: none;
 }

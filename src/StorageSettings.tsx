@@ -37,18 +37,28 @@ export default function StorageSettings() {
         {status === null ? 'Checking...' : STORAGE_STATUS_TEXT[status]}
       </p>
 
-      <div className="options-menu-list settings-actions">
+      {/*
+        Only offered when protection is not granted yet or cannot be
+        confirmed. Hidden while still checking (no flash of the button)
+        and once the device already keeps the data.
+      */}
 
-        <button
-          type="button"
-          onClick={() => {
-            requestPersistence().then(setStatus)
-          }}
-        >
-          Request protection
-        </button>
+      {(status === 'not-protected' || status === 'unknown') && (
 
-      </div>
+        <div className="options-menu-list settings-actions">
+
+          <button
+            type="button"
+            onClick={() => {
+              requestPersistence().then(setStatus)
+            }}
+          >
+            Request protection
+          </button>
+
+        </div>
+
+      )}
 
       <p className="settings-section-description">
         {BACKUP_NOTE}
